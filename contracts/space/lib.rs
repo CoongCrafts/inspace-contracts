@@ -4,7 +4,6 @@
 mod space {
   use ink::storage::{Mapping, Lazy};
   use ink::prelude::string::String;
-  use ink::prelude::{vec, vec::Vec};
   use helper_macros::*;
 
   type Result<T> = core::result::Result<T, Error>;
@@ -26,14 +25,13 @@ mod space {
     desc: Option<String>,
   }
 
-  #[derive(Clone, Debug, Copy, Default, scale::Decode, scale::Encode)]
+  #[derive(Clone, Debug, Copy, Default, PartialEq, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub enum RegistrationType {
     #[default]
-    Invitation,
     PayToJoin,
     RequestToJoin,
-    ClaimWithNFT,
+    // ClaimWithNFT,
   }
 
   #[derive(Clone, Debug, Copy, Default, scale::Decode, scale::Encode)]
@@ -48,7 +46,7 @@ mod space {
   #[derive(Debug, Default, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub struct SpaceConfig {
-    registrations: Vec<RegistrationType>,
+    registration: RegistrationType,
     pricing: Pricing,
   }
 
@@ -104,17 +102,9 @@ mod space {
         None => Self::default_config()
       };
 
-      Self::validate_config(&space_config)?;
-
       instance.config.set(&space_config);
 
       Ok(instance)
-    }
-
-    fn validate_config(config: &SpaceConfig) -> Result<()> {
-      ensure!(!config.registrations.is_empty(), Error::Custom(String::from("At least one membership registration type is required")));
-
-      Ok(())
     }
 
     /// Membership methods
@@ -127,7 +117,7 @@ mod space {
     pub fn grant_membership(&mut self, who: AccountId, ttl: Option<u64>) -> Result<()> {
       // TODO add role based access, so admin can also grant memberships
       // TODO grant multiple membership on one go
-      ensure!(self.owner_id() == Self::env().caller(), Error::Custom(String::from("Unauthorized!")));
+      self.ensure_owner(Self::env().caller())?;
 
       self.do_grant_membership(who, ttl)
     }
@@ -160,7 +150,7 @@ mod space {
     #[ink(message, payable)]
     pub fn pay_to_join(&mut self, who: Option<AccountId>) -> Result<()> {
       let config = self.config();
-      ensure!(config.registrations.iter().any(|x| matches!(x, RegistrationType::PayToJoin)), Error::Custom(String::from("Space doesn't support pay to join!")));
+      ensure!(config.registration == RegistrationType::PayToJoin, Error::Custom(String::from("Space doesn't support pay to join!")));
 
       let registrant = who.unwrap_or(Self::env().caller());
       ensure!(self.members.get(registrant).is_none(), Error::MemberExisted(registrant));
@@ -230,11 +220,25 @@ mod space {
       self.config.get().unwrap_or(Self::default_config())
     }
 
+    #[ink(message)]
+    pub fn update_config(&mut self, config: SpaceConfig) -> Result<()> {
+      self.ensure_owner(Self::env().caller())?;
+      self.config.set(&config);
+
+      Ok(())
+    }
+
     fn default_config() -> SpaceConfig {
       SpaceConfig {
-        registrations: vec![RegistrationType::PayToJoin],
+        registration: RegistrationType::PayToJoin,
         pricing: Pricing::Free,
       }
+    }
+
+    fn ensure_owner(&self, who: AccountId) -> Result<()> {
+      ensure!(who == self.owner_id(), Error::Custom(String::from("UnAuthorized!")));
+
+      Ok(())
     }
   }
 

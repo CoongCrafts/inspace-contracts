@@ -4,6 +4,7 @@
 mod space {
   use ink::storage::{Mapping, Lazy};
   use ink::prelude::string::String;
+  use ink::prelude::{vec, vec::Vec};
   use helper_macros::*;
 
   type Result<T> = core::result::Result<T, Error>;
@@ -20,6 +21,32 @@ mod space {
   pub struct SpaceInfo {
     name: String,
     desc: Option<String>,
+  }
+
+  #[derive(Clone, Debug, Copy, Default, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub enum RegistrationType {
+    #[default]
+    Invitation,
+    PayToJoin,
+    RequestToJoin,
+    ClaimWithNFT,
+  }
+
+  #[derive(Clone, Debug, Copy, Default, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub enum Pricing {
+    #[default]
+    Free,
+    OneTimePaid(u32),
+    Subscription(u32),
+  }
+
+  #[derive(Debug, Default, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub struct SpaceConfig {
+    registrations: Vec<RegistrationType>,
+    pricing: Pricing,
   }
 
   #[derive(Debug, scale::Decode, scale::Encode)]
@@ -41,6 +68,7 @@ mod space {
   #[derive(Default)]
   pub struct Space {
     info: Lazy<SpaceInfo>,
+    config: Lazy<SpaceConfig>,
     ownable: Lazy<SpaceOwnable>,
 
     members_nonce: u32,
@@ -49,7 +77,10 @@ mod space {
 
   impl Space {
     #[ink(constructor)]
-    pub fn new(motherspace_id: AccountId, owner_id: AccountId, space_info: SpaceInfo) -> Result<Self> {
+    pub fn new(motherspace_id: AccountId,
+               owner_id: AccountId,
+               space_info: SpaceInfo,
+               config: Option<SpaceConfig>) -> Result<Self> {
       ensure!(motherspace_id == Self::env().caller(), Error::Custom(String::from("Only MotherSpace can deploy spaces!")));
       ensure!(space_info.name.len() <= 30, Error::Custom(String::from("Space name is at max 30 chars")));
       ensure!(space_info.name.len() >= 3, Error::Custom(String::from("Space name must be at least 3 chars")));
@@ -65,7 +96,22 @@ mod space {
 
       instance.do_grant_membership(owner_id, None)?;
 
+      let space_config = match config {
+        Some(one) => one,
+        None => Self::default_config()
+      };
+
+      Self::validate_config(&space_config)?;
+
+      instance.config.set(&space_config);
+
       Ok(instance)
+    }
+
+    fn validate_config(config: &SpaceConfig) -> Result<()> {
+      ensure!(!config.registrations.is_empty(), Error::Custom(String::from("At least one membership registration type is required")));
+
+      Ok(())
     }
 
     /// Membership methods
@@ -148,6 +194,18 @@ mod space {
     #[ink(message)]
     pub fn info(&self) -> SpaceInfo {
       self.info.get().unwrap()
+    }
+
+    #[ink(message)]
+    pub fn config(&self) -> SpaceConfig {
+      self.config.get().unwrap_or(Self::default_config())
+    }
+
+    fn default_config() -> SpaceConfig {
+      SpaceConfig {
+        registrations: vec![RegistrationType::PayToJoin],
+        pricing: Pricing::Free,
+      }
     }
   }
 

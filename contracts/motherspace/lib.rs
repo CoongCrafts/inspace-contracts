@@ -12,7 +12,7 @@ mod motherspace {
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub enum Error {
-    RandomError(String)
+    Custom(String),
   }
 
 
@@ -21,6 +21,8 @@ mod motherspace {
   pub struct MotherSpace {
     value: bool,
     spaces_count: u32,
+
+    owner_id: Lazy<AccountId>,
   }
 
   impl MotherSpace {
@@ -49,7 +51,6 @@ mod motherspace {
 
     #[ink(message)]
     pub fn deploy(&mut self) -> Result<()> {
-      ensure!(self.spaces_count <= 10, Error::RandomError(String::from("Cannot deploy more than 10 spaces")));
       self.spaces_count = self.spaces_count.checked_add(1).unwrap();
       Ok(())
     }
@@ -63,6 +64,7 @@ mod motherspace {
   impl Upgradeable for MotherSpace {
     #[ink(message)]
     fn set_code_hash(&mut self, code_hash: Hash) {
+      // TODO ensure owner!
       ::ink::env::set_code_hash2::<Environment>(&code_hash).unwrap_or_else(|err| {
         panic!(
           "Failed to `set_code_hash` to {:?} due to {:?}",

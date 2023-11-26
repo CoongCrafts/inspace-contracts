@@ -1,2 +1,5 @@
 [workspace]
-members = ["contracts/*"]
+members = [
+    "contracts/*",
+    "shared/*"
+]

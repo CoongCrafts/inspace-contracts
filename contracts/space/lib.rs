@@ -2,68 +2,72 @@
 
 #[ink::contract]
 mod space {
+  use ink::storage::Lazy;
+  use ink::prelude::string::String;
+  use helper_macros::*;
 
-    /// Defines the storage of your contract.
-    /// Add new fields to the below struct in order
-    /// to add new static storage fields to your contract.
-    #[ink(storage)]
-    pub struct Space {
-        /// Stores a single `bool` value on the storage.
-        value: bool,
+  type Result<T> = core::result::Result<T, Error>;
+
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub enum Error {
+    Custom(String)
+  }
+
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub struct SpaceInfo {
+    name: String,
+    desc: Option<String>,
+  }
+
+  #[derive(Clone, Debug, Copy, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub struct SpaceOwnable {
+    motherspace_id: AccountId,
+    owner_id: AccountId,
+  }
+
+  #[ink(storage)]
+  #[derive(Default)]
+  pub struct Space {
+    info: Lazy<SpaceInfo>,
+    ownable: Lazy<SpaceOwnable>,
+  }
+
+  impl Space {
+    #[ink(constructor)]
+    pub fn new(motherspace_id: AccountId, owner_id: AccountId, space_info: SpaceInfo) -> Result<Self> {
+      ensure!(motherspace_id == Self::env().caller(), Error::Custom(String::from("Only MotherSpace can deploy spaces!")));
+      ensure!(space_info.name.len() <= 30, Error::Custom(String::from("Space name is at max 30 chars")));
+      ensure!(space_info.name.len() >= 3, Error::Custom(String::from("Space name must be at least 3 chars")));
+
+      if let Some(desc) = space_info.desc.clone() {
+        ensure!(desc.len() <= 100, Error::Custom(String::from("Space name is at max 100 chars")));
+      }
+
+      let mut instance = Space::default();
+      instance.info.set(&space_info);
+
+      let ownable = SpaceOwnable { motherspace_id, owner_id };
+      instance.ownable.set(&ownable);
+
+      Ok(instance)
     }
 
-    impl Space {
-        /// Constructor that initializes the `bool` value to the given `init_value`.
-        #[ink(constructor)]
-        pub fn new(init_value: bool) -> Self {
-            Self { value: init_value }
-        }
-
-        /// Constructor that initializes the `bool` value to `false`.
-        ///
-        /// Constructors can delegate to other constructors.
-        #[ink(constructor)]
-        pub fn default() -> Self {
-            Self::new(Default::default())
-        }
-
-        /// A message that can be called on instantiated contracts.
-        /// This one flips the value of the stored `bool` from `true`
-        /// to `false` and vice versa.
-        #[ink(message)]
-        pub fn flip(&mut self) {
-            self.value = !self.value;
-        }
-
-        /// Simply returns the current value of our `bool`.
-        #[ink(message)]
-        pub fn get(&self) -> bool {
-            self.value
-        }
+    #[ink(message)]
+    pub fn owner_id(&self) -> AccountId {
+      self.ownable.get().unwrap().owner_id
     }
 
-    /// Unit tests in Rust are normally defined within such a `#[cfg(test)]`
-    /// module and test functions are marked with a `#[test]` attribute.
-    /// The below code is technically just normal Rust code.
-    #[cfg(test)]
-    mod tests {
-        /// Imports all the definitions from the outer scope so we can use them here.
-        use super::*;
-
-        /// We test if the default constructor does its job.
-        #[ink::test]
-        fn default_works() {
-            let space = Space::default();
-            assert_eq!(space.get(), false);
-        }
-
-        /// We test a simple use case of our contract.
-        #[ink::test]
-        fn it_works() {
-            let mut space = Space::new(false);
-            assert_eq!(space.get(), false);
-            space.flip();
-            assert_eq!(space.get(), true);
-        }
+    #[ink(message)]
+    pub fn motherspace_id(&self) -> AccountId {
+      self.ownable.get().unwrap().motherspace_id
     }
+
+    #[ink(message)]
+    pub fn info(&self) -> SpaceInfo {
+      self.info.get().unwrap()
+    }
+  }
 }

@@ -9,11 +9,14 @@ mod space {
 
   type Result<T> = core::result::Result<T, Error>;
 
+  const SECS_PER_DAY: u64 = 24 * 60 * 60;
+
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub enum Error {
     Custom(String),
     MemberExisted(AccountId),
+    InsufficientPayment,
   }
 
   #[derive(Debug, scale::Decode, scale::Encode)]
@@ -38,8 +41,8 @@ mod space {
   pub enum Pricing {
     #[default]
     Free,
-    OneTimePaid(u32),
-    Subscription(u32),
+    OneTimePaid { price: Balance },
+    Subscription { price: Balance, duration: u32 }, // duration is in days
   }
 
   #[derive(Debug, Default, scale::Decode, scale::Encode)]
@@ -153,11 +156,37 @@ mod space {
       Ok(())
     }
 
+    /// pay to join
+    #[ink(message, payable)]
+    pub fn pay_to_join(&mut self, who: Option<AccountId>) -> Result<()> {
+      let config = self.config();
+      ensure!(config.registrations.iter().any(|x| matches!(x, RegistrationType::PayToJoin)), Error::Custom(String::from("Space doesn't support pay to join!")));
+
+      let registrant = who.unwrap_or(Self::env().caller());
+      ensure!(self.members.get(registrant).is_none(), Error::MemberExisted(registrant));
+
+      let paid_balance: Balance = self.env().transferred_value();
+
+      let mut ttl: Option<u64> = None;
+
+      let valid_payment = match config.pricing {
+        Pricing::Free => true,
+        Pricing::OneTimePaid { price } => paid_balance >= price,
+        Pricing::Subscription { price, duration } => {
+          ttl = Some(SECS_PER_DAY.saturating_mul(duration as u64));
+          paid_balance >= price
+        }
+      };
+
+      ensure!(valid_payment, Error::InsufficientPayment);
+
+      self.do_grant_membership(registrant, ttl)
+    }
+
     // TODO renew membership
     // TODO invitation
     // TODO register for membership
     // TODO approve/reject membership request
-    // TODO pay to join
     // TODO update member info (name, logo)
 
     #[ink(message)]

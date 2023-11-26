@@ -150,4 +150,25 @@ mod space {
       self.info.get().unwrap()
     }
   }
+
+  use traits::Upgradeable;
+
+  impl Upgradeable for Space {
+    #[ink(message)]
+    fn set_code_hash(&mut self, code_hash: Hash) {
+      assert_eq!(self.owner_id(), Self::env().caller(), "UnAuthorized");
+      ink::env::set_code_hash2::<Environment>(&code_hash).unwrap_or_else(|err| {
+        panic!(
+          "Failed to `set_code_hash` to {:?} due to {:?}",
+          code_hash, err
+        )
+      });
+      ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
+    }
+
+    #[ink(message)]
+    fn code_hash(&self) -> Hash {
+      self.env().code_hash(&self.env().account_id()).unwrap()
+    }
+  }
 }

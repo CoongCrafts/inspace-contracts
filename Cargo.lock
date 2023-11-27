@@ -2695,6 +2695,7 @@ dependencies = [
  "ink_e2e",
  "parity-scale-codec",
  "scale-info",
+ "space",
  "traits",
 ]
 

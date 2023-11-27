@@ -12,6 +12,7 @@ scale-info = { version = "2.6", default-features = false, features = ["derive"],
 
 traits = { path = '../../shared/traits', default-features = false, features = [] }
 helper_macros = { path = '../../shared/helper-macros', default-features = false, features = ["ink-as-dependency"] }
+space = { path = '../space', default-features = false, features = ["ink-as-dependency"] }
 
 [dev-dependencies]
 ink_e2e = "4.2.0"

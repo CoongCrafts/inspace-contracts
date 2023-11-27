@@ -1,5 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
 
+pub use space::{SpaceRef};
+
 #[ink::contract]
 mod space {
   use ink::storage::{Mapping, Lazy};
@@ -13,7 +15,7 @@ mod space {
   const MAX_PENDING_REQUESTS: u64 = 500;
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
   pub enum Error {
     Custom(String),
     MemberExisted(AccountId),

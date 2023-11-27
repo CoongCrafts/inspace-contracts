@@ -59,9 +59,9 @@ mod motherspace {
     space_codes: Mapping<Version, CodeHash>,
     space_codes_nonce: Lazy<Version>,
 
-    // TODO improve this tracking
-    owners_to_spaces: Mapping<AccountId, Vec<SpaceId>>,
+    members_to_spaces: Mapping<AccountId, Vec<SpaceId>>,
 
+    deployed_spaces: Mapping<SpaceId, AccountId>,
     spaces_count: Lazy<u32>,
 
     owner_id: Lazy<AccountId>,
@@ -106,23 +106,37 @@ mod motherspace {
       let new_space_id = new_space.to_account_id();
 
       self.spaces_count.set(&new_spaces_count);
-      
-      let mut owner_spaces = self.owners_to_spaces.get(owner_id).unwrap_or_default();
-      owner_spaces.push(new_space_id);
-      self.owners_to_spaces.insert(owner_id, &owner_spaces);
+      self.deployed_spaces.insert(new_space_id, &owner_id);
+
+      self.add_space_member_impl(new_space_id, owner_id);
 
       Ok(new_space_id)
     }
 
     #[ink(message)]
-    pub fn owner_spaces(&self, who: Option<AccountId>) -> Vec<SpaceId> {
-      let owner_id = who.unwrap_or(self.env().caller());
-      self.owners_to_spaces.get(owner_id).unwrap_or_default()
+    pub fn member_spaces(&self, who: Option<AccountId>) -> Vec<SpaceId> {
+      let who = who.unwrap_or(self.env().caller());
+      self.members_to_spaces.get(who).unwrap_or_default()
+    }
+
+    #[ink(message)]
+    pub fn add_space_member(&mut self, who: AccountId) -> Result<()> {
+      let space_id = self.env().caller();
+      ensure!(self.is_deployed_space_impl(space_id), Error::Custom(String::from("Only deployed spaces can call this!")));
+
+      self.add_space_member_impl(space_id, who);
+
+      Ok(())
     }
 
     #[ink(message)]
     pub fn spaces_count(&self) -> u32 {
       self.spaces_count.get_or_default()
+    }
+
+    #[ink(message)]
+    pub fn is_deployed_space(&self, space_id: SpaceId) -> bool {
+      self.is_deployed_space_impl(space_id)
     }
 
     #[ink(message)]
@@ -132,6 +146,18 @@ mod motherspace {
 
     fn latest_space_code(&self) -> CodeHash {
       self.space_codes.get(self.space_codes_nonce.get_or_default()).unwrap()
+    }
+
+    fn is_deployed_space_impl(&self, space_id: SpaceId) -> bool {
+      self.deployed_spaces.contains(space_id)
+    }
+
+    fn add_space_member_impl(&mut self, space_id: SpaceId, member_id: AccountId) {
+      let mut owner_spaces = self.members_to_spaces.get(member_id).unwrap_or_default();
+      if !owner_spaces.contains(&space_id) {
+        owner_spaces.push(space_id);
+        self.members_to_spaces.insert(member_id, &owner_spaces);
+      }
     }
   }
 

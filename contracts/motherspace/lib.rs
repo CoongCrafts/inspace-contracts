@@ -82,11 +82,11 @@ mod motherspace {
     }
 
     #[ink(message)]
-    pub fn deploy_new_space(&mut self, info: SpaceInfo, config: Option<SpaceConfig>) -> Result<SpaceId> {
+    pub fn deploy_new_space(&mut self, info: SpaceInfo, config: Option<SpaceConfig>, owner: Option<AccountId>) -> Result<SpaceId> {
       let new_spaces_count = self.spaces_count().saturating_add(1);
 
       let motherspace_id = Self::env().account_id();
-      let owner_id = Self::env().caller();
+      let owner_id = owner.unwrap_or(Self::env().caller());
 
       let new_space: SpaceRef = build_create::<SpaceRef>()
         .code_hash(self.latest_space_code())

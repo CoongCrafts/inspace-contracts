@@ -84,7 +84,7 @@ mod space {
     owner_id: AccountId,
   }
 
-  #[derive(Debug, Default, scale::Decode, scale::Encode)]
+  #[derive(Clone, Debug, Default, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub struct MemberInfo {
     name: Option<String>,
@@ -105,13 +105,25 @@ mod space {
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub struct PendingRequestsPage {
-    items: Vec<MembershipRequest>,
+  pub struct Pagination<Item> {
+    items: Vec<Item>,
     from: u32,
     per_page: u32,
     has_next_page: bool,
     total: u32,
   }
+
+  type PendingRequestsPage = Pagination<MembershipRequest>;
+
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+  pub struct MemberRecord {
+    index: u32,
+    account_id: AccountId,
+    info: MemberInfo,
+  }
+
+  type MembersPage = Pagination<MemberRecord>;
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -132,9 +144,9 @@ mod space {
     ownable: Lazy<SpaceOwnable>,
 
     // Membership
-    members_nonce: u32,
-    // TODO move this to lazy
+    members_nonce: Lazy<u32>,
     members: Mapping<AccountId, MemberInfo>,
+    index_to_member: Mapping<u32, AccountId>,
 
     // Membership requests
     requests: Mapping<RequestId, MembershipRequest>,
@@ -177,7 +189,33 @@ mod space {
     /// Membership methods
     #[ink(message)]
     pub fn members_count(&self) -> u32 {
-      self.members_nonce
+      self.members_nonce.get_or_default()
+    }
+
+    #[ink(message)]
+    pub fn list_members(&self, from: u32, per_page: u32) -> MembersPage {
+      let last_position = from.saturating_add(per_page);
+      let per_page = per_page.min(50); // limit per page at max 50 items
+      let current_member_nonce = self.members_nonce.get_or_default();
+
+      let mut member_records = Vec::new();
+      for index in (from as usize)..(last_position.min(current_member_nonce) as usize) {
+        let bounded_index = index as u32;
+
+        if let Some(account_id) = self.index_to_member.get(bounded_index) {
+          if let Some(info) = self.members.get(account_id) {
+            member_records.push(MemberRecord { index: bounded_index, account_id, info })
+          }
+        }
+      }
+
+      MembersPage {
+        items: member_records,
+        from,
+        per_page,
+        has_next_page: last_position < current_member_nonce,
+        total: current_member_nonce,
+      }
     }
 
     #[ink(message)]
@@ -192,11 +230,6 @@ mod space {
     fn do_grant_membership(&mut self, who: AccountId, ttl: Option<u64>, register_space_member: bool) -> Result<()> {
       ensure!(self.members.get(who).is_none(), Error::MemberExisted(who));
 
-      let next_members_nonce =
-        self.members_nonce
-          .checked_add(1)
-          .expect("Exceeds number of members");
-
       let current_timestamp = Self::env().block_timestamp();
       let next_renewal_at = ttl.map(|val|
         current_timestamp.checked_add(val).expect("Cannot extend renewal date")
@@ -207,10 +240,17 @@ mod space {
         ..Default::default()
       };
 
-      self.members.insert(who, &new_member);
-      self.members_nonce = next_members_nonce;
+      let current_members_nonce = self.members_nonce.get_or_default();
+      let next_members_nonce =
+        current_members_nonce
+          .checked_add(1)
+          .expect("Exceeds number of members");
 
-      // TODO call add_space_member to motherspace
+      self.members.insert(who, &new_member);
+      self.index_to_member.insert(current_members_nonce, &who);
+      self.members_nonce.set(&next_members_nonce);
+
+      // Register space member in mother space
       if register_space_member {
         let _ = build_call::<DefaultEnvironment>()
           .call(self.motherspace_id())
@@ -358,7 +398,8 @@ mod space {
 
     /// Get list of pending membership
     #[ink(message)]
-    pub fn pending_requests(&self, from: u32, per_page: u32) -> Result<PendingRequestsPage> {
+    pub fn pending_requests(&self, from: u32, per_page: u32) -> PendingRequestsPage {
+      let per_page = per_page.min(50); // limit per page at max 50 items
       let requests = self.pending_requests.get_or_default();
       let last_position = from.saturating_add(per_page);
       let total = requests.len() as u32;
@@ -368,13 +409,13 @@ mod space {
         None => Vec::new()
       };
 
-      Ok(PendingRequestsPage {
+      PendingRequestsPage {
         items,
         from,
         per_page,
         has_next_page: last_position < total,
         total,
-      })
+      }
     }
 
     /// Submit request approvals

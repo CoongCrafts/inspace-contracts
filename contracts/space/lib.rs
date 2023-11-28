@@ -4,6 +4,8 @@ pub use space::{SpaceRef};
 
 #[ink::contract]
 mod space {
+  use ink::env::call::{build_call, ExecutionInput, Selector};
+  use ink::env::{DefaultEnvironment};
   use ink::storage::{Mapping, Lazy};
   use ink::prelude::string::String;
   use ink::prelude::vec::Vec;
@@ -23,11 +25,19 @@ mod space {
     CannotRefundPayment(AccountId, RequestId),
   }
 
-  #[derive(Debug, scale::Decode, scale::Encode)]
+  #[derive(Clone, Debug, PartialEq, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub enum ImageSource {
+    IpfsCid(String),
+    Url(String),
+  }
+
+  #[derive(Debug, Default, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub struct SpaceInfo {
     name: String,
     desc: Option<String>,
+    logo: Option<ImageSource>,
   }
 
   #[derive(Clone, Debug, Copy, Default, PartialEq, scale::Decode, scale::Encode)]
@@ -144,7 +154,7 @@ mod space {
       ensure!(space_info.name.len() >= 3, Error::Custom(String::from("Space name must be at least 3 chars")));
 
       if let Some(desc) = space_info.desc.clone() {
-        ensure!(desc.len() <= 100, Error::Custom(String::from("Space name is at max 100 chars")));
+        ensure!(desc.len() <= 200, Error::Custom(String::from("Space description is at max 100 chars")));
       }
 
       let mut instance = Space::default();
@@ -152,7 +162,7 @@ mod space {
       instance.info.set(&space_info);
       instance.ownable.set(&SpaceOwnable { motherspace_id, owner_id });
 
-      instance.do_grant_membership(owner_id, None)?;
+      instance.do_grant_membership(owner_id, None, false)?;
 
       let space_config = match config {
         Some(one) => one,
@@ -176,10 +186,10 @@ mod space {
       // TODO grant multiple membership on one go
       self.ensure_owner(Self::env().caller())?;
 
-      self.do_grant_membership(who, ttl)
+      self.do_grant_membership(who, ttl, true)
     }
 
-    fn do_grant_membership(&mut self, who: AccountId, ttl: Option<u64>) -> Result<()> {
+    fn do_grant_membership(&mut self, who: AccountId, ttl: Option<u64>, register_space_member: bool) -> Result<()> {
       ensure!(self.members.get(who).is_none(), Error::MemberExisted(who));
 
       let next_members_nonce =
@@ -199,6 +209,19 @@ mod space {
 
       self.members.insert(who, &new_member);
       self.members_nonce = next_members_nonce;
+
+      // TODO call add_space_member to motherspace
+      if register_space_member {
+        let _ = build_call::<DefaultEnvironment>()
+          .call(self.motherspace_id())
+          .gas_limit(0)
+          .exec_input(
+            ExecutionInput::new(Selector::new(ink::selector_bytes!("add_space_member")))
+              .push_arg(who)
+          )
+          .returns::<Result<()>>()
+          .invoke();
+      }
 
       Ok(())
     }
@@ -222,7 +245,7 @@ mod space {
 
       ensure!(valid_payment, Error::InsufficientPayment);
 
-      self.do_grant_membership(registrant, config.ttl())
+      self.do_grant_membership(registrant, config.ttl(), true)
     }
 
     // TODO update member info (name, logo)
@@ -371,7 +394,7 @@ mod space {
 
           if approved {
             // TODO we should return a list of successful, failed items
-            self.do_grant_membership(request.who, self.config.get_or_default().ttl())?;
+            self.do_grant_membership(request.who, self.config.get_or_default().ttl(), true)?;
             approved_count = approved_count.saturating_add(1);
           } else if self.env().transfer(request.who, request.paid).is_ok() {
             rejected_count = rejected_count.saturating_add(1);
@@ -433,6 +456,15 @@ mod space {
     #[ink(message)]
     pub fn info(&self) -> SpaceInfo {
       self.info.get().unwrap()
+    }
+
+    #[ink(message)]
+    pub fn update_info(&mut self, info: SpaceInfo) -> Result<()> {
+      self.ensure_owner(Self::env().caller())?;
+      // TODO validate to limit maximum of chars for each field
+      self.info.set(&info);
+
+      Ok(())
     }
 
     #[ink(message)]

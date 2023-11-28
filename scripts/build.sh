@@ -1,2 +1,2 @@
-./build-motherspace.sh
-./build-space.sh
+./scripts/build-motherspace.sh
+./scripts/build-space.sh

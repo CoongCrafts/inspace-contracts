@@ -24,9 +24,17 @@ mod motherspace {
 
   #[derive(Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+  pub enum ImageSource {
+    IpfsCid(String),
+    Url(String),
+  }
+
+  #[derive(Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
   pub struct SpaceInfo {
     name: String,
     desc: Option<String>,
+    logo: Option<ImageSource>,
   }
 
   #[derive(Clone, Debug, Copy, Default, PartialEq, scale::Decode, scale::Encode)]
@@ -71,14 +79,24 @@ mod motherspace {
     /// Constructor that initializes the `bool` value to the given `init_value`.
     #[ink(constructor)]
     pub fn new(space_code: Hash, owner_id: AccountId) -> Self {
-      let mut instance = MotherSpace::default();
-      instance.owner_id.set(&owner_id);
+      let mut one = MotherSpace::default();
+      one.owner_id.set(&owner_id);
+      one.upgrade_space_code_impl(space_code);
 
-      let initial_space_version: Version = 1;
-      instance.space_codes.insert(initial_space_version, &space_code);
-      instance.space_codes_nonce.set(&initial_space_version);
+      one
+    }
 
-      instance
+    #[ink(message)]
+    pub fn upgrade_space_code(&mut self, new_space_code: CodeHash) -> Result<()> {
+      ensure!(self.owner_id() == self.env().caller(), Error::Custom(String::from("UnAuthorized!")));
+      self.upgrade_space_code_impl(new_space_code);
+
+      Ok(())
+    }
+
+    #[ink(message)]
+    pub fn latest_space_code(&self) -> CodeHash {
+      self.latest_space_code_impl()
     }
 
     #[ink(message)]
@@ -89,7 +107,7 @@ mod motherspace {
       let owner_id = owner.unwrap_or(Self::env().caller());
 
       let new_space: SpaceRef = build_create::<SpaceRef>()
-        .code_hash(self.latest_space_code())
+        .code_hash(self.latest_space_code_impl())
         .gas_limit(0)
         .endowment(0)
         .exec_input(
@@ -144,7 +162,7 @@ mod motherspace {
       self.owner_id.get().unwrap()
     }
 
-    fn latest_space_code(&self) -> CodeHash {
+    fn latest_space_code_impl(&self) -> CodeHash {
       self.space_codes.get(self.space_codes_nonce.get_or_default()).unwrap()
     }
 
@@ -158,6 +176,12 @@ mod motherspace {
         owner_spaces.push(space_id);
         self.members_to_spaces.insert(member_id, &owner_spaces);
       }
+    }
+
+    fn upgrade_space_code_impl(&mut self, new_space_code: CodeHash) {
+      let next_space_code_version: Version = self.space_codes_nonce.get_or_default().checked_add(1).expect("Cannot upgrade space code!");
+      self.space_codes.insert(next_space_code_version, &new_space_code);
+      self.space_codes_nonce.set(&next_space_code_version);
     }
   }
 

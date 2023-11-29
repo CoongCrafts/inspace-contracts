@@ -136,6 +136,14 @@ mod space {
     not_found: u32,
   }
 
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+  pub enum MemberStatus {
+    None,
+    Active,
+    Inactive
+  }
+
   #[ink(storage)]
   #[derive(Default)]
   pub struct Space {
@@ -466,6 +474,27 @@ mod space {
     #[ink(message)]
     pub fn is_active_member(&self, who: AccountId) -> bool {
       self.check_active_member(&who)
+    }
+
+    /// Check member status
+    #[ink(message)]
+    pub fn member_status(&self, who: AccountId) -> MemberStatus {
+      let maybe_member = self.members.get(who);
+      match maybe_member {
+        Some(info) => {
+          match info.next_renewal_at {
+            Some(renewal_at) => {
+              if renewal_at > Self::env().block_timestamp() {
+                MemberStatus::Active
+              } else {
+                MemberStatus::Inactive
+              }
+            },
+            None => MemberStatus::Active
+          }
+        }
+        None => MemberStatus::None
+      }
     }
 
     fn check_active_member(&self, id: &AccountId) -> bool {

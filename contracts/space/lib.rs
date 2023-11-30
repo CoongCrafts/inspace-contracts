@@ -90,6 +90,7 @@ mod space {
     name: Option<String>,
     /// None -> non expiring, Some -> expiring
     next_renewal_at: Option<Timestamp>,
+    joined_at: Timestamp,
   }
 
   type RequestId = u32;
@@ -245,6 +246,7 @@ mod space {
 
       let new_member = MemberInfo {
         next_renewal_at,
+        joined_at: current_timestamp,
         ..Default::default()
       };
 

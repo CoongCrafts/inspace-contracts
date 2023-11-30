@@ -552,6 +552,32 @@ mod space {
       Ok(())
     }
 
+
+    /// Member info
+    #[ink(message)]
+    pub fn get_member_info(&self, who: crate::space::AccountId) -> Option<crate::space::MemberInfo> {
+      self.members.get(&who)
+    }
+
+    #[ink(message)]
+    pub fn set_member_info(&mut self, name: Option<String>) -> Result<()> {
+      let caller = self.env().caller();
+      ensure!(self.check_active_member(&caller), Error::Custom(String::from("The caller is inactive or not a member")));
+
+      let updated_member_info = self
+          .members
+          .get(&caller)
+          .map(|member_info| MemberInfo {
+            name,
+            ..member_info
+          })
+          .unwrap();
+
+      self.members.insert(caller, &updated_member_info);
+
+      Ok(())
+    }
+
     fn default_config() -> SpaceConfig {
       SpaceConfig {
         registration: RegistrationType::PayToJoin,

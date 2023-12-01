@@ -563,6 +563,10 @@ mod space {
     pub fn update_member_info(&mut self, name: Option<String>) -> Result<()> {
       let caller = self.env().caller();
       ensure!(self.check_active_member(&caller), Error::Custom(String::from("The caller is inactive or not a member")));
+      if let Some(new_name) = &name {
+        ensure!(new_name.len() >= 3, Error::Custom(String::from("Display name must be a least 3 characters")));
+        ensure!(new_name.len() <= 30, Error::Custom(String::from("Display name must be at most 30 characters")));
+      }
 
       let updated_member_info = self
           .members

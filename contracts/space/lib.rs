@@ -23,6 +23,7 @@ mod space {
     MemberExisted(AccountId),
     InsufficientPayment,
     CannotRefundPayment(AccountId, RequestId),
+    NotActiveMember,
   }
 
   #[derive(Clone, Debug, PartialEq, scale::Decode, scale::Encode)]
@@ -555,14 +556,15 @@ mod space {
 
     /// Member info
     #[ink(message)]
-    pub fn get_member_info(&self, who: crate::space::AccountId) -> Option<crate::space::MemberInfo> {
+    pub fn member_info(&self, who: AccountId) -> Option<MemberInfo> {
       self.members.get(&who)
     }
 
     #[ink(message)]
     pub fn update_member_info(&mut self, name: Option<String>) -> Result<()> {
       let caller = self.env().caller();
-      ensure!(self.check_active_member(&caller), Error::Custom(String::from("The caller is inactive or not a member")));
+      
+      ensure!(self.check_active_member(&caller), Error::NotActiveMember);
       if let Some(new_name) = &name {
         ensure!(new_name.len() >= 3, Error::Custom(String::from("Display name must be a least 3 characters")));
         ensure!(new_name.len() <= 30, Error::Custom(String::from("Display name must be at most 30 characters")));

@@ -24,6 +24,7 @@ mod space {
     MemberExisted(AccountId),
     InsufficientPayment,
     CannotRefundPayment(AccountId, RequestId),
+    NotActiveMember,
   }
 
   #[derive(Clone, Debug, PartialEq, scale::Decode, scale::Encode)]
@@ -91,6 +92,7 @@ mod space {
     name: Option<String>,
     /// None -> non expiring, Some -> expiring
     next_renewal_at: Option<Timestamp>,
+    joined_at: Timestamp,
   }
 
   type RequestId = u32;
@@ -280,6 +282,7 @@ mod space {
 
       let new_member = MemberInfo {
         next_renewal_at,
+        joined_at: current_timestamp,
         ..Default::default()
       };
 
@@ -581,6 +584,37 @@ mod space {
     pub fn update_config(&mut self, config: SpaceConfig) -> Result<()> {
       self.ensure_owner(Self::env().caller())?;
       self.config.set(&config);
+
+      Ok(())
+    }
+
+
+    /// Member info
+    #[ink(message)]
+    pub fn member_info(&self, who: AccountId) -> Option<MemberInfo> {
+      self.members.get(&who)
+    }
+
+    #[ink(message)]
+    pub fn update_member_info(&mut self, name: Option<String>) -> Result<()> {
+      let caller = self.env().caller();
+      
+      ensure!(self.check_active_member(&caller), Error::NotActiveMember);
+      if let Some(new_name) = &name {
+        ensure!(new_name.len() >= 3, Error::Custom(String::from("Display name must be a least 3 characters")));
+        ensure!(new_name.len() <= 30, Error::Custom(String::from("Display name must be at most 30 characters")));
+      }
+
+      let updated_member_info = self
+          .members
+          .get(&caller)
+          .map(|member_info| MemberInfo {
+            name,
+            ..member_info
+          })
+          .unwrap();
+
+      self.members.insert(caller, &updated_member_info);
 
       Ok(())
     }

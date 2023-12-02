@@ -2,24 +2,33 @@
 
 #[ink::contract]
 mod motherspace {
-  use ink::env::call::{build_create, ExecutionInput, Selector};
+  use ink::env::{
+    DefaultEnvironment,
+    call::{build_call, build_create, ExecutionInput, Selector},
+  };
   use traits::{Upgradeable};
   use ink::storage::{Lazy, Mapping};
-  use ink::prelude::string::String;
-  use ink::prelude::vec::Vec;
+  use ink::prelude::{format, vec::Vec, string::String};
   use ink::ToAccountId;
   use helper_macros::*;
   use space::SpaceRef;
 
   type Result<T> = core::result::Result<T, Error>;
+  type Nonce = u32;
+  // index
   type Version = u32;
   type CodeHash = Hash;
   type SpaceId = AccountId;
+  type PluginId = u32;
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
   pub enum Error {
     Custom(String),
+    UnAuthorized,
+    SpaceNotFound,
+    PluginNotFound,
+    PluginLaunchFailed,
   }
 
   #[derive(Debug, scale::Decode, scale::Encode)]
@@ -65,7 +74,7 @@ mod motherspace {
   #[derive(Default)]
   pub struct MotherSpace {
     space_codes: Mapping<Version, CodeHash>,
-    space_codes_nonce: Lazy<Version>,
+    space_codes_nonce: Lazy<Nonce>,
 
     members_to_spaces: Mapping<AccountId, Vec<SpaceId>>,
 
@@ -73,6 +82,9 @@ mod motherspace {
     spaces_count: Lazy<u32>,
 
     owner_id: Lazy<AccountId>,
+
+    plugin_launchers: Mapping<PluginId, AccountId>,
+    plugins_nonce: Lazy<Nonce>,
   }
 
   impl MotherSpace {
@@ -88,7 +100,7 @@ mod motherspace {
 
     #[ink(message)]
     pub fn upgrade_space_code(&mut self, new_space_code: CodeHash) -> Result<()> {
-      ensure!(self.owner_id() == self.env().caller(), Error::Custom(String::from("UnAuthorized!")));
+      ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
       self.upgrade_space_code_impl(new_space_code);
 
       Ok(())
@@ -100,7 +112,8 @@ mod motherspace {
     }
 
     #[ink(message)]
-    pub fn deploy_new_space(&mut self, info: SpaceInfo, config: Option<SpaceConfig>, owner: Option<AccountId>) -> Result<SpaceId> {
+    pub fn deploy_new_space(&mut self, info: SpaceInfo, config: Option<SpaceConfig>,
+                            owner: Option<AccountId>, plugins: Option<Vec<PluginId>>) -> Result<(SpaceId, Vec<(PluginId, AccountId)>)> {
       let new_spaces_count = self.spaces_count().saturating_add(1);
 
       let motherspace_id = Self::env().account_id();
@@ -128,7 +141,13 @@ mod motherspace {
 
       self.add_space_member_impl(new_space_id, owner_id);
 
-      Ok(new_space_id)
+      // TODO should emit errors if plugins fail to deploy
+      let deployed_plugins = match plugins {
+        Some(plugin_ids) => self.install_plugins_impl(new_space_id, plugin_ids).unwrap(),
+        None => Vec::new()
+      };
+
+      Ok((new_space_id, deployed_plugins))
     }
 
     #[ink(message)]
@@ -155,6 +174,106 @@ mod motherspace {
     #[ink(message)]
     pub fn is_deployed_space(&self, space_id: SpaceId) -> bool {
       self.is_deployed_space_impl(space_id)
+    }
+
+    #[ink(message)]
+    pub fn plugins_count(&self) -> u32 {
+      self.plugins_nonce.get_or_default()
+    }
+
+    #[ink(message)]
+    pub fn register_plugin_launcher(&mut self, launcher_address: AccountId) -> Result<PluginId> {
+      // For now only owner can register plugin launcher
+      // Later we can add a mechanism for anyone can submit a plugin application for approval
+      ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
+
+      let new_plugin_id = self.plugins_nonce.get_or_default();
+      self.plugin_launchers.insert(new_plugin_id, &launcher_address);
+      self.plugins_nonce.set(&new_plugin_id.checked_add(1).expect("Exceeds number of plugins"));
+
+      Ok(new_plugin_id)
+    }
+
+    /// For the sake of simplicity, get full list of plugin launcher
+    /// We'll need to add pagination later
+    #[ink(message)]
+    pub fn plugin_launchers(&self) -> Vec<(PluginId, AccountId)> {
+      let mut launchers: Vec<(PluginId, AccountId)> = Vec::new();
+
+      for plugin_id in 0..(self.plugins_count()) {
+        if let Some(launcher_address) = self.plugin_launchers.get(plugin_id) {
+          launchers.push((plugin_id, launcher_address));
+        }
+      }
+
+      launchers
+    }
+
+    /// Install plugins
+    #[ink(message)]
+    pub fn install_plugins(&mut self, space_id: SpaceId, plugins: Vec<PluginId>) -> Result<Vec<(PluginId, AccountId)>> {
+      if !self.is_deployed_space(space_id) {
+        return Err(Error::SpaceNotFound);
+      }
+
+      let space_owner_id = build_call::<DefaultEnvironment>()
+        .call(space_id)
+        .gas_limit(0)
+        .exec_input(
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("owner_id")))
+        )
+        .returns::<AccountId>()
+        .invoke();
+
+      ensure!(space_owner_id == self.env().caller(), Error::UnAuthorized);
+
+      self.install_plugins_impl(space_id, plugins)
+    }
+
+    fn install_plugins_impl(&mut self, space_id: SpaceId, plugins: Vec<PluginId>) -> Result<Vec<(PluginId, AccountId)>> {
+      let mut deployed_plugins: Vec<(PluginId, AccountId)> = Vec::new();
+      for plugin_id in plugins {
+        let opt_launcher = self.plugin_launchers.get(plugin_id);
+        if let Some(launcher_address) = opt_launcher {
+          let plugin_address_rs = build_call::<DefaultEnvironment>()
+            .call(launcher_address)
+            .gas_limit(0)
+            .exec_input(
+              ExecutionInput::new(Selector::new(ink::selector_bytes!("launch")))
+                .push_arg(space_id)
+            )
+            .returns::<Result<AccountId>>()
+            .invoke();
+
+          if let Ok(plugin_address) = plugin_address_rs {
+            deployed_plugins.push((plugin_id, plugin_address));
+          } else {
+            return Err(Error::PluginLaunchFailed);
+          }
+        }
+      }
+
+      if deployed_plugins.is_empty() {
+        return Ok(deployed_plugins);
+      }
+
+      ::ink::env::debug_println!("Deployed plugins {:?}", deployed_plugins);
+
+      let result = build_call::<DefaultEnvironment>()
+        .call(space_id)
+        .gas_limit(0)
+        .exec_input(
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("attach_plugins")))
+            .push_arg(&deployed_plugins)
+        )
+        .returns::<Result<()>>()
+        .invoke();
+
+      if result.is_ok() {
+        Ok(deployed_plugins)
+      } else {
+        Err(Error::Custom(format!("Attach plugin failed, error: {:?}", result.unwrap_err())))
+      }
     }
 
     #[ink(message)]

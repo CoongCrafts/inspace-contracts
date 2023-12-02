@@ -20,6 +20,7 @@ mod space {
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
   pub enum Error {
     Custom(String),
+    UnAuthorized,
     MemberExisted(AccountId),
     InsufficientPayment,
     CannotRefundPayment(AccountId, RequestId),
@@ -95,6 +96,8 @@ mod space {
   type RequestId = u32;
   type RequestApproval = (AccountId, bool);
 
+  type PluginId = u32;
+
   #[derive(Clone, Debug, Copy, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub struct MembershipRequest {
@@ -161,6 +164,10 @@ mod space {
     registrant_to_request: Mapping<AccountId, RequestId>,
     pending_requests: Lazy<Vec<RequestId>>,
     requests_nonce: Lazy<u32>,
+
+    // plugins
+    plugins: Mapping<PluginId, AccountId>,
+    plugin_ids: Lazy<Vec<PluginId>>
   }
 
   impl Space {
@@ -192,6 +199,34 @@ mod space {
       instance.config.set(&space_config);
 
       Ok(instance)
+    }
+
+    /// Attach plugins to space, motherspace call this when install plugins for spaces
+    #[ink(message)]
+    pub fn attach_plugins(&mut self, plugins: Vec<(PluginId, AccountId)>) -> Result<()> {
+      ensure!(self.motherspace_id() == Self::env().caller(), Error::Custom(String::from("Only MotherSpace can attach plugins!")));
+
+      if plugins.iter().any(|&p| self.plugins.contains(p.0)) {
+        return Err(Error::Custom(String::from("Cannot attach a plugin more than one.")));
+      }
+
+      let mut plugin_ids = self.plugin_ids.get_or_default();
+      for (id, address) in plugins {
+        self.plugins.insert(id, &address);
+        plugin_ids.push(id);
+      }
+
+      self.plugin_ids.set(&plugin_ids);
+
+      Ok(())
+    }
+
+    #[ink(message)]
+    pub fn plugins(&self) -> Vec<(PluginId, AccountId)> {
+      self.plugin_ids.get_or_default()
+        .iter()
+        .map(|&id| (id, self.plugins.get(id).unwrap()))
+        .collect()
     }
 
     /// Membership methods

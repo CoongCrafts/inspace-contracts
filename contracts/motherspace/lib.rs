@@ -19,7 +19,8 @@ mod motherspace {
   type Version = u32;
   type CodeHash = Hash;
   type SpaceId = AccountId;
-  type PluginId = u32;
+  type PluginIndex = u32;
+  type PluginId = [u8; 4];
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
@@ -29,6 +30,7 @@ mod motherspace {
     SpaceNotFound,
     PluginNotFound,
     PluginLaunchFailed,
+    PluginIdExisted,
   }
 
   #[derive(Debug, scale::Decode, scale::Encode)]
@@ -83,7 +85,8 @@ mod motherspace {
 
     owner_id: Lazy<AccountId>,
 
-    plugin_launchers: Mapping<PluginId, AccountId>,
+    ids_to_plugin_launchers: Mapping<PluginId, AccountId>,
+    plugin_launchers: Mapping<PluginIndex, PluginId>,
     plugins_nonce: Lazy<Nonce>,
   }
 
@@ -182,13 +185,15 @@ mod motherspace {
     }
 
     #[ink(message)]
-    pub fn register_plugin_launcher(&mut self, launcher_address: AccountId) -> Result<PluginId> {
+    pub fn register_plugin_launcher(&mut self, plugin_id: PluginId, launcher_address: AccountId) -> Result<PluginIndex> {
       // For now only owner can register plugin launcher
       // Later we can add a mechanism for anyone can submit a plugin application for approval
       ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
+      ensure!(!self.ids_to_plugin_launchers.contains(plugin_id), Error::PluginIdExisted);
 
       let new_plugin_id = self.plugins_nonce.get_or_default();
-      self.plugin_launchers.insert(new_plugin_id, &launcher_address);
+      self.plugin_launchers.insert(new_plugin_id, &plugin_id);
+      self.ids_to_plugin_launchers.insert(plugin_id, &launcher_address);
       self.plugins_nonce.set(&new_plugin_id.checked_add(1).expect("Exceeds number of plugins"));
 
       Ok(new_plugin_id)
@@ -200,9 +205,11 @@ mod motherspace {
     pub fn plugin_launchers(&self) -> Vec<(PluginId, AccountId)> {
       let mut launchers: Vec<(PluginId, AccountId)> = Vec::new();
 
-      for plugin_id in 0..(self.plugins_count()) {
-        if let Some(launcher_address) = self.plugin_launchers.get(plugin_id) {
-          launchers.push((plugin_id, launcher_address));
+      for idx in 0..(self.plugins_count()) {
+        if let Some(plugin_id) = self.plugin_launchers.get(idx) {
+          if let Some(launcher_address) = self.ids_to_plugin_launchers.get(plugin_id) {
+            launchers.push((plugin_id, launcher_address));
+          }
         }
       }
 
@@ -216,6 +223,7 @@ mod motherspace {
         return Err(Error::SpaceNotFound);
       }
 
+      // Ensure space owner
       let space_owner_id = build_call::<DefaultEnvironment>()
         .call(space_id)
         .gas_limit(0)
@@ -233,7 +241,7 @@ mod motherspace {
     fn install_plugins_impl(&mut self, space_id: SpaceId, plugins: Vec<PluginId>) -> Result<Vec<(PluginId, AccountId)>> {
       let mut deployed_plugins: Vec<(PluginId, AccountId)> = Vec::new();
       for plugin_id in plugins {
-        let opt_launcher = self.plugin_launchers.get(plugin_id);
+        let opt_launcher = self.ids_to_plugin_launchers.get(plugin_id);
         if let Some(launcher_address) = opt_launcher {
           let plugin_address_rs = build_call::<DefaultEnvironment>()
             .call(launcher_address)

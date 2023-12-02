@@ -96,7 +96,7 @@ mod space {
   type RequestId = u32;
   type RequestApproval = (AccountId, bool);
 
-  type PluginId = u32;
+  type PluginId = [u8; 4];
 
   #[derive(Clone, Debug, Copy, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]

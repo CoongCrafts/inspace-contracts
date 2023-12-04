@@ -191,7 +191,7 @@ mod posts {
       self.ensure_space_owner()?;
 
       ::ink::env::set_code_hash2::<Environment>(&code_hash)
-        .or_else(|err| Err(Error::Custom(format!("Failed to `set_code_hash` to {:?} due to {:?}", code_hash, err))))?;
+        .map_err(|err| Error::Custom(format!("Failed to `set_code_hash` to {:?} due to {:?}", code_hash, err)))?;
 
       ::ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
 

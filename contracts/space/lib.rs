@@ -25,6 +25,7 @@ mod space {
     InsufficientPayment,
     CannotRefundPayment(AccountId, RequestId),
     NotActiveMember,
+    MemberNotFound,
   }
 
   #[derive(Clone, Debug, PartialEq, scale::Decode, scale::Encode)]
@@ -90,7 +91,7 @@ mod space {
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub struct MemberInfo {
     name: Option<String>,
-    /// None -> non expiring, Some -> expiring
+    /// None -> non expiring, Some(>0) -> expiring, Some(0) -> member already left
     next_renewal_at: Option<Timestamp>,
     joined_at: Timestamp,
   }
@@ -141,12 +142,13 @@ mod space {
     not_found: u32,
   }
 
-  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[derive(Clone, Debug, PartialEq, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
   pub enum MemberStatus {
     None,
-    Active,
-    Inactive
+    Active, // nextRenewalAt >= now
+    Inactive, // 0 < nextRenewalAt < now
+    Left // nextRenewalAt == 0, was a member before but already left
   }
 
   #[ink(storage)]
@@ -273,28 +275,36 @@ mod space {
     }
 
     fn do_grant_membership(&mut self, who: AccountId, ttl: Option<u64>, register_space_member: bool) -> Result<()> {
-      ensure!(self.members.get(who).is_none(), Error::MemberExisted(who));
+      let member_status = self.member_status(who);
+      ensure!(member_status != MemberStatus::Active, Error::MemberExisted(who));
 
       let current_timestamp = Self::env().block_timestamp();
       let next_renewal_at = ttl.map(|val|
         current_timestamp.checked_add(val).expect("Cannot extend renewal date")
       );
 
-      let new_member = MemberInfo {
-        next_renewal_at,
-        joined_at: current_timestamp,
-        ..Default::default()
-      };
+      if member_status == MemberStatus::None {
+        let new_member = MemberInfo {
+          next_renewal_at,
+          joined_at: current_timestamp,
+          ..Default::default()
+        };
 
-      let current_members_nonce = self.members_nonce.get_or_default();
-      let next_members_nonce =
-        current_members_nonce
-          .checked_add(1)
-          .expect("Exceeds number of members");
+        let current_members_nonce = self.members_nonce.get_or_default();
+        let next_members_nonce =
+          current_members_nonce
+            .checked_add(1)
+            .expect("Exceeds number of members");
 
-      self.members.insert(who, &new_member);
-      self.index_to_member.insert(current_members_nonce, &who);
-      self.members_nonce.set(&next_members_nonce);
+        self.members.insert(who, &new_member);
+        self.index_to_member.insert(current_members_nonce, &who);
+        self.members_nonce.set(&next_members_nonce);
+      } else {
+        let mut member_info = self.members.get(who).unwrap();
+        member_info.next_renewal_at = next_renewal_at;
+
+        self.members.insert(who, &member_info);
+      }
 
       // Register space member in mother space
       if register_space_member {
@@ -524,8 +534,10 @@ mod space {
             Some(renewal_at) => {
               if renewal_at > Self::env().block_timestamp() {
                 MemberStatus::Active
-              } else {
+              } else if renewal_at > 0 {
                 MemberStatus::Inactive
+              } else {
+                MemberStatus::Left
               }
             },
             None => MemberStatus::Active
@@ -533,6 +545,37 @@ mod space {
         }
         None => MemberStatus::None
       }
+    }
+
+    /// Active member to leave space
+    /// For now, only the member himself can call this
+    /// Later we can consider allow owner to do this
+    /// or a voting mechanism to force a member to leave
+    #[ink(message)]
+    pub fn leave(&mut self) -> Result<()> {
+      let who = self.env().caller();
+
+      ensure!(who != self.owner_id(), Error::Custom(String::from("Owner cannot leave the space")));
+
+      let member_status = self.member_status(who);
+      ensure!(member_status == MemberStatus::Active, Error::NotActiveMember);
+      let mut member_info = self.members.get(who).unwrap();
+      member_info.next_renewal_at = Some(0);
+
+      self.members.insert(who, &member_info);
+
+      // Remove space member tracking
+      let _ = build_call::<DefaultEnvironment>()
+        .call(self.motherspace_id())
+        .gas_limit(0)
+        .exec_input(
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("remove_space_member")))
+            .push_arg(who)
+        )
+        .returns::<Result<()>>()
+        .invoke();
+
+      Ok(())
     }
 
     fn check_active_member(&self, id: &AccountId) -> bool {
@@ -592,7 +635,7 @@ mod space {
     /// Member info
     #[ink(message)]
     pub fn member_info(&self, who: AccountId) -> Option<MemberInfo> {
-      self.members.get(&who)
+      self.members.get(who)
     }
 
     #[ink(message)]
@@ -607,7 +650,7 @@ mod space {
 
       let updated_member_info = self
           .members
-          .get(&caller)
+          .get(caller)
           .map(|member_info| MemberInfo {
             name,
             ..member_info

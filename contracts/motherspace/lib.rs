@@ -170,6 +170,16 @@ mod motherspace {
     }
 
     #[ink(message)]
+    pub fn remove_space_member(&mut self, who: AccountId) -> Result<()> {
+      let space_id = self.env().caller();
+      ensure!(self.is_deployed_space_impl(space_id), Error::Custom(String::from("Only deployed spaces can call this!")));
+
+      self.remove_space_member_impl(space_id, who);
+
+      Ok(())
+    }
+
+    #[ink(message)]
     pub fn spaces_count(&self) -> u32 {
       self.spaces_count.get_or_default()
     }
@@ -302,6 +312,14 @@ mod motherspace {
       if !owner_spaces.contains(&space_id) {
         owner_spaces.push(space_id);
         self.members_to_spaces.insert(member_id, &owner_spaces);
+      }
+    }
+
+    fn remove_space_member_impl(&mut self, space_id: SpaceId, member_id: AccountId) {
+      let owner_spaces = self.members_to_spaces.get(member_id).unwrap_or_default();
+      if owner_spaces.contains(&space_id) {
+        let new_spaces: Vec<AccountId> = owner_spaces.into_iter().filter(|&x| x != space_id).collect();
+        self.members_to_spaces.insert(member_id, &new_spaces);
       }
     }
 

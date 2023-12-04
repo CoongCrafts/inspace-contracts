@@ -330,7 +330,8 @@ mod space {
       ensure!(config.registration == RegistrationType::PayToJoin, Error::Custom(String::from("Space doesn't support pay to join!")));
 
       let registrant = who.unwrap_or(Self::env().caller());
-      ensure!(self.members.get(registrant).is_none(), Error::MemberExisted(registrant));
+      let member_status = self.member_status(registrant);
+      ensure!(member_status != MemberStatus::Active, Error::MemberExisted(registrant));
 
       let paid_balance: Balance = self.env().transferred_value();
 
@@ -357,10 +358,8 @@ mod space {
       );
 
       let registrant = who.unwrap_or(Self::env().caller());
-      ensure!(
-        self.members.get(registrant).is_none(),
-        Error::MemberExisted(registrant)
-      );
+      let member_status = self.member_status(registrant);
+      ensure!(member_status != MemberStatus::Active, Error::MemberExisted(registrant));
 
       let mut pending_requests = self.pending_requests.get_or_default();
 

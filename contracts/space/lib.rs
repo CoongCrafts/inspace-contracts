@@ -363,18 +363,37 @@ mod space {
 
       let mut pending_requests = self.pending_requests.get_or_default();
 
+      ensure!(
+        pending_requests.len() as u64 <= MAX_PENDING_REQUESTS,
+        Error::Custom(String::from("Exceeding maximum of pending requests"))
+      );
+
       let maybe_request_id = self.registrant_to_request.get(registrant);
       if let Some(existing_request_id) = maybe_request_id {
         ensure!(
           !pending_requests.contains(&existing_request_id),
           Error::Custom(String::from("The registrant is already having a pending request!"))
-        )
-      }
+        );
 
-      ensure!(
-        pending_requests.len() as u64 <= MAX_PENDING_REQUESTS,
-        Error::Custom(String::from("Exceeding maximum of pending requests"))
-      );
+        let paid_balance: Balance = self.env().transferred_value();
+        let valid_payment = match config.pricing {
+          Pricing::Free => true,
+          Pricing::OneTimePaid { price } => paid_balance >= price,
+          Pricing::Subscription { price, .. } => paid_balance >= price
+        };
+
+        ensure!(valid_payment, Error::InsufficientPayment);
+
+        pending_requests.push(existing_request_id);
+        self.pending_requests.set(&pending_requests);
+
+        self.requests.insert(
+          existing_request_id,
+          &MembershipRequest { who: registrant, paid: paid_balance, requested_at: Self::env().block_timestamp(), approved: None },
+        );
+
+        return Ok(());
+      }
 
       let next_request_id = self.requests_nonce.get_or_default().checked_add(1).expect("Exceeding number of requests!");
 

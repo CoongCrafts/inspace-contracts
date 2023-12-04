@@ -106,6 +106,7 @@ mod space {
   pub struct MembershipRequest {
     who: AccountId,
     paid: Balance,
+    requested_at: Timestamp,
     approved: Option<bool>,
   }
 
@@ -394,7 +395,7 @@ mod space {
 
       self.requests.insert(
         next_request_id,
-        &MembershipRequest { who: registrant, paid: paid_balance, approved: None },
+        &MembershipRequest { who: registrant, paid: paid_balance, requested_at: Self::env().block_timestamp(), approved: None },
       );
 
       self.registrant_to_request.insert(registrant, &next_request_id);
@@ -430,6 +431,25 @@ mod space {
           }
         }
       }
+    }
+
+    #[ink(message)]
+    pub fn cancel_request(&mut self) -> Result<()> {
+      let caller = self.env().caller();
+
+      ensure!(self.get_membership_request(caller).is_some(), Error::Custom(String::from("Not found request!")));
+
+      let (request_id, request) = self.get_membership_request(caller).unwrap();
+
+      if !self.env().transfer(caller, request.paid).is_ok() {
+        return Err(Error::CannotRefundPayment(request.who, request_id));
+      }
+
+      let mut pending_requests = self.pending_requests.get_or_default();
+      pending_requests.retain(|x| x != &request_id);
+      self.pending_requests.set(&pending_requests);
+
+      Ok(())
     }
 
     // Improvements

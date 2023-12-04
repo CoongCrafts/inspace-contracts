@@ -344,7 +344,6 @@ mod space {
       self.do_grant_membership(registrant, config.ttl(), true)
     }
 
-    // TODO update member info (name, logo)
     // TODO renew membership
 
     /// Register for membership

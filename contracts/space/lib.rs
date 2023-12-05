@@ -108,6 +108,7 @@ mod space {
   pub struct MembershipRequest {
     who: AccountId,
     paid: Balance,
+    requested_at: Timestamp,
     approved: Option<bool>,
   }
 
@@ -364,8 +365,8 @@ mod space {
       let config = self.config();
       ensure!(config.registration == RegistrationType::PayToJoin, Error::Custom(String::from("Space doesn't support pay to join!")));
 
-      let registrant = who.unwrap_or(Self::env().caller());
-      ensure!(self.members.get(registrant).is_none(), Error::MemberExisted(registrant));
+      let registrant = who.unwrap_or(self.env().caller());
+      ensure!(!self.is_member(Some(registrant)), Error::MemberExisted(registrant));
 
       let paid_balance: Balance = self.env().transferred_value();
 
@@ -392,10 +393,7 @@ mod space {
       );
 
       let registrant = who.unwrap_or(Self::env().caller());
-      ensure!(
-        self.members.get(registrant).is_none(),
-        Error::MemberExisted(registrant)
-      );
+      ensure!(!self.is_member(Some(registrant)), Error::MemberExisted(registrant));
 
       let mut pending_requests = self.pending_requests.get_or_default();
 
@@ -404,7 +402,7 @@ mod space {
         ensure!(
           !pending_requests.contains(&existing_request_id),
           Error::Custom(String::from("The registrant is already having a pending request!"))
-        )
+        );
       }
 
       ensure!(
@@ -430,7 +428,12 @@ mod space {
 
       self.requests.insert(
         next_request_id,
-        &MembershipRequest { who: registrant, paid: paid_balance, approved: None },
+        &MembershipRequest {
+          who: registrant,
+          paid: paid_balance,
+          requested_at: self.env().block_timestamp(),
+          approved: None,
+        },
       );
 
       self.registrant_to_request.insert(registrant, &next_request_id);
@@ -466,6 +469,27 @@ mod space {
           }
         }
       }
+    }
+
+    #[ink(message)]
+    pub fn cancel_request(&mut self) -> Result<()> {
+      let caller = self.env().caller();
+
+      let maybe_request = self.get_membership_request(caller);
+      ensure!(maybe_request.is_some(), Error::Custom(String::from("Request Not Found")));
+
+      let (request_id, request) = maybe_request.unwrap();
+
+      // Refund the payment
+      if !self.env().transfer(caller, request.paid).is_ok() {
+        return Err(Error::CannotRefundPayment(request.who, request_id));
+      }
+
+      let mut pending_requests = self.pending_requests.get_or_default();
+      pending_requests.retain(|&x| x != request_id);
+      self.pending_requests.set(&pending_requests);
+
+      Ok(())
     }
 
     // Improvements
@@ -714,7 +738,7 @@ mod space {
           }
 
           one
-        },
+        }
         None => Self::default_config()
       }
     }
@@ -723,6 +747,13 @@ mod space {
       ensure!(self.env().caller() == self.owner_id(), Error::UnAuthorized);
 
       Ok(())
+    }
+
+    fn is_member(&self, who: Option<AccountId>) -> bool {
+      let who = who.unwrap_or(self.env().caller());
+      let member_status = self.member_status(who);
+
+      member_status == MemberStatus::Active || member_status == MemberStatus::Inactive
     }
   }
 

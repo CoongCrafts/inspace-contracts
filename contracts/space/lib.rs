@@ -50,6 +50,7 @@ mod space {
     #[default]
     PayToJoin,
     RequestToJoin,
+    InviteOnly,
     // ClaimWithNFT,
   }
 
@@ -203,15 +204,9 @@ mod space {
 
       instance.info.set(&space_info);
       instance.ownable.set(&SpaceOwnable { motherspace_id, owner_id });
+      instance.config.set(&Self::normalize_config(config));
 
       instance.do_grant_membership(owner_id, None, false)?;
-
-      let space_config = match config {
-        Some(one) => one,
-        None => Self::default_config()
-      };
-
-      instance.config.set(&space_config);
 
       Ok(instance)
     }
@@ -370,9 +365,8 @@ mod space {
       let config = self.config();
       ensure!(config.registration == RegistrationType::PayToJoin, Error::Custom(String::from("Space doesn't support pay to join!")));
 
-      let registrant = who.unwrap_or(Self::env().caller());
-      let member_status = self.member_status(registrant);
-      ensure!(member_status != MemberStatus::Active, Error::MemberExisted(registrant));
+      let registrant = who.unwrap_or(self.env().caller());
+      ensure!(!self.is_member(Some(registrant)), Error::MemberExisted(registrant));
 
       let paid_balance: Balance = self.env().transferred_value();
 
@@ -399,15 +393,9 @@ mod space {
       );
 
       let registrant = who.unwrap_or(Self::env().caller());
-      let member_status = self.member_status(registrant);
-      ensure!(member_status != MemberStatus::Active, Error::MemberExisted(registrant));
+      ensure!(!self.is_member(Some(registrant)), Error::MemberExisted(registrant));
 
       let mut pending_requests = self.pending_requests.get_or_default();
-
-      ensure!(
-        pending_requests.len() as u64 <= MAX_PENDING_REQUESTS,
-        Error::Custom(String::from("Exceeding maximum of pending requests"))
-      );
 
       let maybe_request_id = self.registrant_to_request.get(registrant);
       if let Some(existing_request_id) = maybe_request_id {
@@ -415,26 +403,12 @@ mod space {
           !pending_requests.contains(&existing_request_id),
           Error::Custom(String::from("The registrant is already having a pending request!"))
         );
-
-        let paid_balance: Balance = self.env().transferred_value();
-        let valid_payment = match config.pricing {
-          Pricing::Free => true,
-          Pricing::OneTimePaid { price } => paid_balance >= price,
-          Pricing::Subscription { price, .. } => paid_balance >= price
-        };
-
-        ensure!(valid_payment, Error::InsufficientPayment);
-
-        pending_requests.push(existing_request_id);
-        self.pending_requests.set(&pending_requests);
-
-        self.requests.insert(
-          existing_request_id,
-          &MembershipRequest { who: registrant, paid: paid_balance, requested_at: Self::env().block_timestamp(), approved: None },
-        );
-
-        return Ok(());
       }
+
+      ensure!(
+        pending_requests.len() as u64 <= MAX_PENDING_REQUESTS,
+        Error::Custom(String::from("Exceeding maximum of pending requests"))
+      );
 
       let next_request_id = self.requests_nonce.get_or_default().checked_add(1).expect("Exceeding number of requests!");
 
@@ -454,7 +428,12 @@ mod space {
 
       self.requests.insert(
         next_request_id,
-        &MembershipRequest { who: registrant, paid: paid_balance, requested_at: Self::env().block_timestamp(), approved: None },
+        &MembershipRequest {
+          who: registrant,
+          paid: paid_balance,
+          requested_at: self.env().block_timestamp(),
+          approved: None,
+        },
       );
 
       self.registrant_to_request.insert(registrant, &next_request_id);
@@ -496,16 +475,18 @@ mod space {
     pub fn cancel_request(&mut self) -> Result<()> {
       let caller = self.env().caller();
 
-      ensure!(self.get_membership_request(caller).is_some(), Error::Custom(String::from("Not found request!")));
+      let maybe_request = self.get_membership_request(caller);
+      ensure!(maybe_request.is_some(), Error::Custom(String::from("Request Not Found")));
 
-      let (request_id, request) = self.get_membership_request(caller).unwrap();
+      let (request_id, request) = maybe_request.unwrap();
 
+      // Refund the payment
       if !self.env().transfer(caller, request.paid).is_ok() {
         return Err(Error::CannotRefundPayment(request.who, request_id));
       }
 
       let mut pending_requests = self.pending_requests.get_or_default();
-      pending_requests.retain(|x| x != &request_id);
+      pending_requests.retain(|&x| x != request_id);
       self.pending_requests.set(&pending_requests);
 
       Ok(())
@@ -704,7 +685,7 @@ mod space {
     #[ink(message)]
     pub fn update_config(&mut self, config: SpaceConfig) -> Result<()> {
       self.ensure_owner()?;
-      self.config.set(&config);
+      self.config.set(&Self::normalize_config(Some(config)));
 
       Ok(())
     }
@@ -747,10 +728,32 @@ mod space {
       }
     }
 
+    fn normalize_config(maybe_config: Option<SpaceConfig>) -> SpaceConfig {
+      match maybe_config {
+        Some(mut one) => {
+          // Invite only mode only accept free pricing
+          // We can later allow payment but this is good for now.
+          if one.registration == RegistrationType::InviteOnly {
+            one.pricing = Pricing::Free;
+          }
+
+          one
+        }
+        None => Self::default_config()
+      }
+    }
+
     fn ensure_owner(&self) -> Result<()> {
       ensure!(self.env().caller() == self.owner_id(), Error::UnAuthorized);
 
       Ok(())
+    }
+
+    fn is_member(&self, who: Option<AccountId>) -> bool {
+      let who = who.unwrap_or(self.env().caller());
+      let member_status = self.member_status(who);
+
+      member_status == MemberStatus::Active || member_status == MemberStatus::Inactive
     }
   }
 

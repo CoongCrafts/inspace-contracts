@@ -54,6 +54,8 @@ mod motherspace {
     #[default]
     PayToJoin,
     RequestToJoin,
+    InviteOnly,
+    // ClaimWithNFT,
   }
 
   #[derive(Clone, Debug, Copy, Default, scale::Decode, scale::Encode)]

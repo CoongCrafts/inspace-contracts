@@ -26,6 +26,7 @@ mod space {
     CannotRefundPayment(AccountId, RequestId),
     NotActiveMember,
     MemberNotFound,
+    PluginNotFound,
   }
 
   #[derive(Clone, Debug, PartialEq, scale::Decode, scale::Encode)]
@@ -149,7 +150,15 @@ mod space {
     None,
     Active, // nextRenewalAt >= now
     Inactive, // 0 < nextRenewalAt < now
-    Left // nextRenewalAt == 0, was a member before but already left
+    Left, // nextRenewalAt == 0, was a member before but already left
+  }
+
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+  pub struct PluginInfo {
+    id: PluginId,
+    address: AccountId,
+    disabled: bool,
   }
 
   #[ink(storage)]
@@ -172,7 +181,8 @@ mod space {
 
     // plugins
     plugins: Mapping<PluginId, AccountId>,
-    plugin_ids: Lazy<Vec<PluginId>>
+    disabled_plugin_ids: Lazy<Vec<PluginId>>,
+    plugin_ids: Lazy<Vec<PluginId>>,
   }
 
   impl Space {
@@ -227,11 +237,42 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn plugins(&self) -> Vec<(PluginId, AccountId)> {
+    pub fn plugins(&self) -> Vec<PluginInfo> {
       self.plugin_ids.get_or_default()
         .iter()
-        .map(|&id| (id, self.plugins.get(id).unwrap()))
+        .map(|&id| PluginInfo {
+          id,
+          address: self.plugins.get(id).unwrap(),
+          disabled: self.disabled_plugin_ids.get_or_default().contains(&id),
+        })
         .collect()
+    }
+
+    #[ink(message)]
+    pub fn enable_plugin(&mut self, plugin_id: PluginId) -> Result<()> {
+      self.ensure_owner()?;
+      ensure!(self.plugin_ids.get_or_default().contains(&plugin_id), Error::PluginNotFound);
+
+      let mut disabled_ids = self.disabled_plugin_ids.get_or_default();
+      disabled_ids.retain(|&x| x != plugin_id);
+      self.disabled_plugin_ids.set(&disabled_ids);
+
+      Ok(())
+    }
+
+    #[ink(message)]
+    pub fn disable_plugin(&mut self, plugin_id: PluginId) -> Result<()> {
+      self.ensure_owner()?;
+      let plugin_ids = self.plugin_ids.get_or_default();
+      ensure!(plugin_ids.contains(&plugin_id), Error::PluginNotFound);
+
+      let mut disabled_ids = self.disabled_plugin_ids.get_or_default();
+      if !disabled_ids.contains(&plugin_id) {
+        disabled_ids.push(plugin_id);
+        self.disabled_plugin_ids.set(&disabled_ids);
+      }
+
+      Ok(())
     }
 
     /// Membership methods
@@ -270,7 +311,7 @@ mod space {
     pub fn grant_membership(&mut self, who: AccountId, ttl: Option<u64>) -> Result<()> {
       // TODO add role based access, so admin can also grant memberships
       // TODO grant multiple membership on one go
-      self.ensure_owner(Self::env().caller())?;
+      self.ensure_owner()?;
 
       self.do_grant_membership(who, ttl, true)
     }
@@ -514,7 +555,7 @@ mod space {
     /// Submit request approvals
     #[ink(message)]
     pub fn submit_request_approvals(&mut self, approvals: Vec<RequestApproval>) -> Result<ApprovalSubmissionResult> {
-      self.ensure_owner(self.env().caller())?;
+      self.ensure_owner()?;
 
       let mut approved_count: u32 = 0;
       let mut rejected_count: u32 = 0;
@@ -576,7 +617,7 @@ mod space {
               } else {
                 MemberStatus::Left
               }
-            },
+            }
             None => MemberStatus::Active
           }
         }
@@ -648,7 +689,7 @@ mod space {
 
     #[ink(message)]
     pub fn update_info(&mut self, info: SpaceInfo) -> Result<()> {
-      self.ensure_owner(Self::env().caller())?;
+      self.ensure_owner()?;
       // TODO validate to limit maximum of chars for each field
       self.info.set(&info);
 
@@ -662,7 +703,7 @@ mod space {
 
     #[ink(message)]
     pub fn update_config(&mut self, config: SpaceConfig) -> Result<()> {
-      self.ensure_owner(Self::env().caller())?;
+      self.ensure_owner()?;
       self.config.set(&config);
 
       Ok(())
@@ -678,7 +719,7 @@ mod space {
     #[ink(message)]
     pub fn update_member_info(&mut self, name: Option<String>) -> Result<()> {
       let caller = self.env().caller();
-      
+
       ensure!(self.check_active_member(&caller), Error::NotActiveMember);
       if let Some(new_name) = &name {
         ensure!(new_name.len() >= 3, Error::Custom(String::from("Display name must be a least 3 characters")));
@@ -686,13 +727,13 @@ mod space {
       }
 
       let updated_member_info = self
-          .members
-          .get(caller)
-          .map(|member_info| MemberInfo {
-            name,
-            ..member_info
-          })
-          .unwrap();
+        .members
+        .get(caller)
+        .map(|member_info| MemberInfo {
+          name,
+          ..member_info
+        })
+        .unwrap();
 
       self.members.insert(caller, &updated_member_info);
 
@@ -706,8 +747,8 @@ mod space {
       }
     }
 
-    fn ensure_owner(&self, who: AccountId) -> Result<()> {
-      ensure!(who == self.owner_id(), Error::Custom(String::from("UnAuthorized!")));
+    fn ensure_owner(&self) -> Result<()> {
+      ensure!(self.env().caller() == self.owner_id(), Error::UnAuthorized);
 
       Ok(())
     }

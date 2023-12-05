@@ -1414,6 +1414,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "flipper"
+version = "0.1.0"
+dependencies = [
+ "helper_macros",
+ "ink",
+ "ink_e2e",
+ "parity-scale-codec",
+ "scale-info",
+ "traits",
+]
+
+[[package]]
+name = "flipper_launcher"
+version = "0.1.0"
+dependencies = [
+ "flipper",
+ "helper_macros",
+ "ink",
+ "ink_e2e",
+ "parity-scale-codec",
+ "scale-info",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

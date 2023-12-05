@@ -50,6 +50,7 @@ mod space {
     #[default]
     PayToJoin,
     RequestToJoin,
+    InviteOnly,
     // ClaimWithNFT,
   }
 

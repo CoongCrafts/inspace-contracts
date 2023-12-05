@@ -203,15 +203,9 @@ mod space {
 
       instance.info.set(&space_info);
       instance.ownable.set(&SpaceOwnable { motherspace_id, owner_id });
+      instance.config.set(&Self::normalize_config(config));
 
       instance.do_grant_membership(owner_id, None, false)?;
-
-      let space_config = match config {
-        Some(one) => one,
-        None => Self::default_config()
-      };
-
-      instance.config.set(&space_config);
 
       Ok(instance)
     }
@@ -667,7 +661,7 @@ mod space {
     #[ink(message)]
     pub fn update_config(&mut self, config: SpaceConfig) -> Result<()> {
       self.ensure_owner()?;
-      self.config.set(&config);
+      self.config.set(&Self::normalize_config(Some(config)));
 
       Ok(())
     }
@@ -707,6 +701,21 @@ mod space {
       SpaceConfig {
         registration: RegistrationType::PayToJoin,
         pricing: Pricing::Free,
+      }
+    }
+
+    fn normalize_config(maybe_config: Option<SpaceConfig>) -> SpaceConfig {
+      match maybe_config {
+        Some(mut one) => {
+          // Invite only mode only accept free pricing
+          // We can later allow payment but this is good for now.
+          if one.registration == RegistrationType::InviteOnly {
+            one.pricing = Pricing::Free;
+          }
+
+          one
+        },
+        None => Self::default_config()
       }
     }
 

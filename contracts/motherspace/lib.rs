@@ -74,13 +74,6 @@ mod motherspace {
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub struct SpaceRecord {
-      owner_id: AccountId,
-      space_id: AccountId,
-  }
-
-  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
   pub struct Pagination<Item> {
     items: Vec<Item>,
     from: u32,
@@ -89,7 +82,7 @@ mod motherspace {
     total: u32,
   }
 
-  type SpacesPage = Pagination<SpaceRecord>;
+  type SpacesPage = Pagination<SpaceId>;
 
   #[ink(storage)]
   #[derive(Default)]
@@ -186,9 +179,7 @@ mod motherspace {
       for index in (from as usize)..(last_position.min(current_spaces_count) as usize) {
         let bounded_index = index as u32;
         if let Some(space_id) = self.index_to_space.get(bounded_index) {
-          if let Some(owner_id) = self.deployed_spaces.get(space_id) {
-              space_records.push(SpaceRecord {space_id, owner_id})
-          }
+            space_records.push(space_id)
         }
       }
 

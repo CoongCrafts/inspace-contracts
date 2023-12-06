@@ -74,6 +74,18 @@ mod motherspace {
     pricing: Pricing,
   }
 
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+  pub struct Pagination<Item> {
+    items: Vec<Item>,
+    from: u32,
+    per_page: u32,
+    has_next_page: bool,
+    total: u32,
+  }
+
+  type SpacesPage = Pagination<SpaceId>;
+
   #[ink(storage)]
   #[derive(Default)]
   pub struct MotherSpace {
@@ -83,6 +95,7 @@ mod motherspace {
     members_to_spaces: Mapping<AccountId, Vec<SpaceId>>,
 
     deployed_spaces: Mapping<SpaceId, AccountId>,
+    index_to_space: Mapping<u32, SpaceId>,
     spaces_count: Lazy<u32>,
 
     owner_id: Lazy<AccountId>,
@@ -119,7 +132,7 @@ mod motherspace {
     #[ink(message)]
     pub fn deploy_new_space(&mut self, info: SpaceInfo, config: Option<SpaceConfig>,
                             owner: Option<AccountId>, plugins: Option<Vec<PluginId>>) -> Result<(SpaceId, Vec<(PluginId, AccountId)>)> {
-      let new_spaces_count = self.spaces_count().saturating_add(1);
+      let new_spaces_count = self.spaces_count.get_or_default();
 
       let motherspace_id = Self::env().account_id();
       let owner_id = owner.unwrap_or(Self::env().caller());
@@ -141,8 +154,11 @@ mod motherspace {
 
       let new_space_id = new_space.to_account_id();
 
-      self.spaces_count.set(&new_spaces_count);
       self.deployed_spaces.insert(new_space_id, &owner_id);
+      self.index_to_space.insert(new_spaces_count, &new_space_id);
+
+      let next_spaces_count = new_spaces_count.saturating_add(1);
+      self.spaces_count.set(&next_spaces_count);
 
       self.add_space_member_impl(new_space_id, owner_id);
 
@@ -153,6 +169,29 @@ mod motherspace {
       };
 
       Ok((new_space_id, deployed_plugins))
+    }
+
+    #[ink(message)]
+    pub fn list_spaces(&self, from: u32, per_page: u32) -> SpacesPage {
+      let last_position = from.saturating_add(per_page);
+      let per_page = per_page.min(50); // limit per page at max 50 items
+      let current_spaces_count = self.spaces_count.get_or_default();
+
+      let mut space_records = Vec::new();
+      for index in (from as usize)..(last_position.min(current_spaces_count) as usize) {
+        let bounded_index = index as u32;
+        if let Some(space_id) = self.index_to_space.get(bounded_index) {
+            space_records.push(space_id)
+        }
+      }
+
+      SpacesPage {
+        items: space_records,
+        from,
+        per_page,
+        has_next_page: last_position < current_spaces_count,
+        total: current_spaces_count,
+      }
     }
 
     #[ink(message)]

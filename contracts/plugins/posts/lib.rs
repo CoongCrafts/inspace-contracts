@@ -32,6 +32,16 @@ mod posts {
   }
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+  pub struct Pagination<Item> {
+    items: Vec<Item>,
+    from: u32,
+    per_page: u32,
+    has_next_page: bool,
+    total: u32,
+  }
+
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub struct Post {
     content: PostContent,
@@ -39,6 +49,15 @@ mod posts {
     created_at: Timestamp,
     updated_at: Option<Timestamp>,
   }
+
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+  pub struct PostRecord {
+    post_id: PostId,
+    post: Post,
+  }
+
+  type PostsPage = Pagination<PostRecord>;
 
   #[ink(storage)]
   #[derive(Default)]
@@ -101,6 +120,31 @@ mod posts {
       self.posts.insert(id, &post);
 
       Ok(())
+    }
+
+    #[ink(message)]
+    pub fn list_posts(&self, from: u32, per_page: u32) -> PostsPage {
+      let per_page = per_page.min(50); // limit per page at max 50 items
+      let current_posts_nonce = self.posts_nonce.get_or_default();
+      let last_position = current_posts_nonce.saturating_sub(from);
+      let from = last_position.saturating_sub(per_page);
+
+      let mut post_records = Vec::new();
+      for index in ((from as usize)..(last_position.min(current_posts_nonce) as usize)).rev() {
+        let bounded_index = index as u32;
+
+        if let Some(post) = self.posts.get(bounded_index) {
+          post_records.push(PostRecord {post_id: bounded_index, post});
+        }
+      }
+
+      PostsPage {
+        items: post_records,
+        from,
+        per_page,
+        has_next_page: from > 0,
+        total: current_posts_nonce,
+      }
     }
 
     #[ink(message)]

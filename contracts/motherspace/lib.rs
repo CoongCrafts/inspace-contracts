@@ -118,7 +118,7 @@ mod motherspace {
 
     #[ink(message)]
     pub fn upgrade_space_code(&mut self, new_space_code: CodeHash) -> Result<()> {
-      ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
+      self.ensure_owner()?;
       self.upgrade_space_code_impl(new_space_code);
 
       Ok(())
@@ -239,7 +239,7 @@ mod motherspace {
     pub fn register_plugin_launcher(&mut self, plugin_id: PluginId, launcher_address: AccountId) -> Result<PluginIndex> {
       // For now only owner can register plugin launcher
       // Later we can add a mechanism for anyone can submit a plugin application for approval
-      ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
+      self.ensure_owner()?;
       ensure!(!self.ids_to_plugin_launchers.contains(plugin_id), Error::PluginIdExisted);
 
       let new_plugin_id = self.plugins_nonce.get_or_default();
@@ -340,6 +340,14 @@ mod motherspace {
       self.owner_id.get().unwrap()
     }
 
+    #[ink(message)]
+    pub fn transfer_ownership(&mut self, who: AccountId) -> Result<()> {
+      self.ensure_owner()?;
+      self.owner_id.set(&who);
+
+      Ok(())
+    }
+
     fn latest_space_code_impl(&self) -> CodeHash {
       self.space_codes.get(self.space_codes_nonce.get_or_default()).unwrap()
     }
@@ -368,6 +376,12 @@ mod motherspace {
       let next_space_code_version: Version = self.space_codes_nonce.get_or_default().checked_add(1).expect("Cannot upgrade space code!");
       self.space_codes.insert(next_space_code_version, &new_space_code);
       self.space_codes_nonce.set(&next_space_code_version);
+    }
+
+    fn ensure_owner(&self) -> Result<()> {
+      ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
+
+      Ok(())
     }
   }
 

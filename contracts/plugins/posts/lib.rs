@@ -40,7 +40,14 @@ mod posts {
     has_next_page: bool,
     total: u32,
   }
-
+    
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub enum Ordering {
+    Descending,
+    Ascending,
+  }
+  
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub struct Post {
@@ -123,27 +130,32 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn list_posts(&self, from: u32, per_page: u32) -> PostsPage {
-      let per_page = per_page.min(50); // limit per page at max 50 items
-      let current_posts_nonce = self.posts_nonce.get_or_default();
-      let last_position = current_posts_nonce.saturating_sub(from);
-      let from = last_position.saturating_sub(per_page);
+    pub fn list_posts(&self, from: u32, per_page: u32, ordering: Ordering) -> PostsPage {
+      match ordering {
+        Ordering::Ascending => panic!("Not supported"),
+        Ordering::Descending => {
+          let per_page = per_page.min(50); // limit per page at max 50 items
+          let current_posts_nonce = self.posts_nonce.get_or_default();
+          let bounded_from = from.saturating_add(1);
+          let last_position = bounded_from.saturating_sub(per_page);
 
-      let mut post_records = Vec::new();
-      for index in ((from as usize)..(last_position.min(current_posts_nonce) as usize)).rev() {
-        let bounded_index = index as u32;
+          let mut post_records = Vec::new();
+          for index in ((last_position as usize)..(bounded_from.min(current_posts_nonce) as usize)).rev() {
+            let bounded_index = index as u32;
 
-        if let Some(post) = self.posts.get(bounded_index) {
-          post_records.push(PostRecord {post_id: bounded_index, post});
+            if let Some(post) = self.posts.get(bounded_index) {
+              post_records.push(PostRecord {post_id: bounded_index, post});
+            }
+          }
+
+          PostsPage {
+            items: post_records,
+            from,
+            per_page,
+            has_next_page: last_position > 0,
+            total: current_posts_nonce,
+          }
         }
-      }
-
-      PostsPage {
-        items: post_records,
-        from,
-        per_page,
-        has_next_page: from > 0,
-        total: current_posts_nonce,
       }
     }
 

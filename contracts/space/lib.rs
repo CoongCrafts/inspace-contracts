@@ -270,6 +270,24 @@ mod space {
       Ok(())
     }
 
+    #[ink(message)]
+    pub fn plugin_code_hash(&mut self, plugin_id: PluginId) -> Result<Hash> {
+      let plugin_ids = self.plugin_ids.get_or_default();
+      ensure!(plugin_ids.contains(&plugin_id), Error::PluginNotFound);
+      let plugin_address = self.plugins.get(plugin_id).ok_or(Error::PluginNotFound)?;
+
+      let code_hash = build_call::<DefaultEnvironment>()
+        .call(plugin_address)
+        .gas_limit(0)
+        .exec_input(
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("code_hash")))
+        )
+        .returns::<Hash>()
+        .invoke();
+
+      Ok(code_hash)
+    }
+
     /// Membership methods
     #[ink(message)]
     pub fn members_count(&self) -> u32 {

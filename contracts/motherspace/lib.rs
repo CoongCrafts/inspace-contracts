@@ -181,7 +181,7 @@ mod motherspace {
       for index in (from as usize)..(last_position.min(current_spaces_count) as usize) {
         let bounded_index = index as u32;
         if let Some(space_id) = self.index_to_space.get(bounded_index) {
-            space_records.push(space_id)
+          space_records.push(space_id)
         }
       }
 
@@ -250,6 +250,18 @@ mod motherspace {
       Ok(new_plugin_id)
     }
 
+    /// Update plugin launcher address or remove it
+    // #[ink(message)]
+    // pub fn update_plugin_launcher(&mut self, plugin_id: PluginId, launcher_address: Option<AccountId>) -> Result<()> {
+    //   self.ensure_owner()?;
+    //   let ZERO_ACCOUNT: AccountId = [0; 32].into();
+    //   ensure!(self.ids_to_plugin_launchers.contains(plugin_id), Error::PluginNotFound);
+    //   let new_address = launcher_address.unwrap_or(ZERO_ACCOUNT);
+    //   self.ids_to_plugin_launchers.insert(plugin_id, &new_address);
+    //
+    //   Ok(())
+    // }
+
     /// For the sake of simplicity, get full list of plugin launcher
     /// We'll need to add pagination later
     #[ink(message)]
@@ -266,6 +278,40 @@ mod motherspace {
 
       launchers
     }
+    #[ink(message)]
+    pub fn latest_plugin_code(&self, plugin_id: PluginId) -> Result<CodeHash> {
+      let launcher = self.ids_to_plugin_launchers.get(plugin_id).ok_or(Error::PluginNotFound)?;
+
+      let result = build_call::<DefaultEnvironment>()
+        .call(launcher)
+        .gas_limit(0)
+        .exec_input(
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("latest_plugin_code")))
+        )
+        .returns::<CodeHash>()
+        .invoke();
+
+      Ok(result)
+    }
+
+    #[ink(message)]
+    pub fn upgrade_plugin_code(&mut self, plugin_id: PluginId, new_code_hash: CodeHash) -> Result<Version> {
+      self.ensure_owner()?;
+      let launcher = self.ids_to_plugin_launchers.get(plugin_id).ok_or(Error::PluginNotFound)?;
+
+      let new_version = build_call::<DefaultEnvironment>()
+        .call(launcher)
+        .gas_limit(0)
+        .exec_input(
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("upgrade_plugin_code")))
+            .push_arg(new_code_hash)
+        )
+        .returns::<Version>()
+        .invoke();
+
+      Ok(new_version)
+    }
+
 
     /// Install plugins
     #[ink(message)]

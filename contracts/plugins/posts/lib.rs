@@ -6,7 +6,7 @@ pub use posts::{PostsRef};
 mod posts {
   use ink::env::call::{build_call, ExecutionInput, Selector};
   use ink::env::DefaultEnvironment;
-  use ink::prelude::{vec::Vec, string::String, format};
+  use ink::prelude::{vec::Vec, string::String};
   use ink::storage::{Mapping, Lazy};
 
   type Result<T> = core::result::Result<T, Error>;
@@ -110,14 +110,14 @@ mod posts {
 
     #[ink(message)]
     pub fn update_post(&mut self, id: PostId, content: PostContent) -> Result<()> {
-      let caller = Self::env().caller();
-
       self.ensure_active_member()?;
 
       let mut post = self.get_post_by_id(id).ok_or(Error::PostNotExisted)?;
 
-      // TODO allow space owner to update post
-      if caller != post.author {
+      let caller = Self::env().caller();
+      let space_owner_id = self.get_space_owner_id();
+
+      if !(caller == post.author || caller == space_owner_id) {
         return Err(Error::UnAuthorized);
       }
 
@@ -222,17 +222,20 @@ mod posts {
       }
     }
 
-    fn ensure_space_owner(&self) -> Result<()> {
-      let space_owner_id = build_call::<DefaultEnvironment>()
+    fn get_space_owner_id(&self) -> AccountId {
+      build_call::<DefaultEnvironment>()
         .call(self.get_space_id())
         .gas_limit(0)
         .exec_input(
           ExecutionInput::new(Selector::new(ink::selector_bytes!("owner_id")))
         )
         .returns::<AccountId>()
-        .invoke();
+        .invoke()
+    }
 
+    fn ensure_space_owner(&self) -> Result<()> {
       let caller = Self::env().caller();
+      let space_owner_id = self.get_space_owner_id();
 
       if space_owner_id == caller {
         Ok(())
@@ -247,7 +250,7 @@ mod posts {
       self.ensure_space_owner()?;
 
       ::ink::env::set_code_hash2::<Environment>(&code_hash)
-        .map_err(|err| Error::Custom(format!("Failed to `set_code_hash` to {:?} due to {:?}", code_hash, err)))?;
+        .map_err(|err| Error::Custom(::ink::prelude::format!("Failed to `set_code_hash` to {:?} due to {:?}", code_hash, err)))?;
 
       ::ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
 

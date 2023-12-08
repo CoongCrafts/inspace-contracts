@@ -50,8 +50,11 @@ mod flipper_launcher {
       self.latest_plugin_code_impl()
     }
 
+    /// For now, we can only upgrade plugin code via motherspace
     #[ink(message)]
     pub fn upgrade_plugin_code(&mut self, new_code_hash: Hash) -> Result<Version> {
+      self.ensure_motherspace()?;
+
       Ok(self.upgrade_plugin_code_impl(new_code_hash))
     }
 
@@ -83,15 +86,6 @@ mod flipper_launcher {
       Ok(new_contract.to_account_id())
     }
 
-    // #[ink(message)]
-    // pub fn update_motherspace_id(&mut self, new_motherspace_id: AccountId) -> Result<()> {
-    //   ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
-    //
-    //   self.motherspace_id.set(&new_motherspace_id);
-    //
-    //   Ok(())
-    // }
-
     #[ink(message)]
     pub fn launches_count(&self) -> u32 {
       self.launches_count.get_or_default()
@@ -117,6 +111,34 @@ mod flipper_launcher {
 
     fn latest_plugin_code_impl(&self) -> Hash {
       self.plugin_codes.get(self.plugin_codes_nonce.get_or_default()).unwrap()
+    }
+
+    fn ensure_motherspace(&self) -> Result<()> {
+      ensure!(self.motherspace_id() == self.env().caller(), Error::UnAuthorized);
+      Ok(())
+    }
+
+    fn ensure_owner(&self) -> Result<()> {
+      ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
+      Ok(())
+    }
+
+    /// Upgradeable
+    #[ink(message)]
+    pub fn set_code_hash(&mut self, code_hash: Hash) -> Result<()> {
+      self.ensure_owner()?;
+
+      ::ink::env::set_code_hash2::<Environment>(&code_hash)
+        .map_err(|err| Error::Custom(::ink::prelude::format!("Failed to `set_code_hash` to {:?} due to {:?}", code_hash, err)))?;
+
+      ::ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
+
+      Ok(())
+    }
+
+    #[ink(message)]
+    pub fn code_hash(&self) -> Hash {
+      self.env().code_hash(&self.env().account_id()).unwrap()
     }
   }
 }

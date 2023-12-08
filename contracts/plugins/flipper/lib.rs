@@ -6,7 +6,7 @@ pub use flipper::{FlipperRef};
 mod flipper {
   use ink::env::call::{build_call, ExecutionInput, Selector};
   use ink::env::DefaultEnvironment;
-  use ink::prelude::{string::String, format};
+  use ink::prelude::{string::String};
   use ink::storage::{Lazy};
 
   type Result<T> = core::result::Result<T, Error>;
@@ -121,7 +121,7 @@ mod flipper {
       self.ensure_space_owner()?;
 
       ::ink::env::set_code_hash2::<Environment>(&code_hash)
-        .map_err(|err| Error::Custom(format!("Failed to `set_code_hash` to {:?} due to {:?}", code_hash, err)))?;
+        .map_err(|err| Error::Custom(::ink::prelude::format!("Failed to `set_code_hash` to {:?} due to {:?}", code_hash, err)))?;
 
       ::ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
 

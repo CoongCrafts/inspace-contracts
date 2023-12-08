@@ -7,4 +7,6 @@ members = [
     "contracts/plugins/posts/launcher",
     "contracts/plugins/flipper",
     "contracts/plugins/flipper/launcher",
+    "contracts/plugins/polls",
+    "contracts/plugins/polls/launcher",
 ]

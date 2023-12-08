@@ -481,7 +481,7 @@ mod space {
       let (request_id, request) = maybe_request.unwrap();
 
       // Refund the payment
-      if !self.env().transfer(caller, request.paid).is_ok() {
+      if self.env().transfer(caller, request.paid).is_err() {
         return Err(Error::CannotRefundPayment(request.who, request_id));
       }
 
@@ -654,6 +654,17 @@ mod space {
     #[ink(message)]
     pub fn owner_id(&self) -> AccountId {
       self.ownable.get().unwrap().owner_id
+    }
+
+    #[ink(message)]
+    pub fn transfer_ownership(&mut self, who: AccountId) -> Result<()> {
+      self.ensure_owner()?;
+      let mut ownable = self.ownable.get().unwrap();
+      ownable.owner_id = who;
+
+      self.ownable.set(&ownable);
+
+      Ok(())
     }
 
     /// Get motherspace id

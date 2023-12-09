@@ -9,7 +9,7 @@ InSpace Contracts
 </h1>
 
 <p align="center">
-<a href="https://github.com/CoongCrafts/inspaciness">InSpace UI</a> • <a href="https://inspace.ink">InSpace Application</a>
+<a href="https://github.com/CoongCrafts/inspaciness">InSpace UI Repo</a> • <a href="https://inspace.ink">InSpace Application</a>
 <p>
 
 

@@ -24,6 +24,15 @@ mod posts {
   type PostId = u32;
   type Nonce = u32;
 
+  /// Who can post?
+  #[derive(Clone, Default, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub enum PostPerm {
+    #[default]
+    SpaceOwner,
+    ActiveMember,
+  }
+
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub enum PostContent {
@@ -40,14 +49,14 @@ mod posts {
     has_next_page: bool,
     total: u32,
   }
-    
+
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub enum Ordering {
     Descending,
     Ascending,
   }
-  
+
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
   pub struct Post {
@@ -74,6 +83,8 @@ mod posts {
 
     posts: Mapping<PostId, Post>,
     posts_nonce: Lazy<Nonce>,
+
+    post_perm: Lazy<PostPerm>,
   }
 
   impl Posts {
@@ -88,7 +99,7 @@ mod posts {
 
     #[ink(message)]
     pub fn new_post(&mut self, content: PostContent) -> Result<PostId> {
-      self.ensure_active_member()?;
+      self.ensure_post_permission()?;
 
       let caller = Self::env().caller();
 
@@ -144,7 +155,7 @@ mod posts {
             let bounded_index = index as u32;
 
             if let Some(post) = self.posts.get(bounded_index) {
-              post_records.push(PostRecord {post_id: bounded_index, post});
+              post_records.push(PostRecord { post_id: bounded_index, post });
             }
           }
 
@@ -169,6 +180,20 @@ mod posts {
       ids.iter()
         .map(|&id| (id, self.get_post_by_id(id)))
         .collect()
+    }
+
+    #[ink(message)]
+    pub fn post_perm(&self) -> PostPerm {
+      self.post_perm.get_or_default()
+    }
+
+    #[ink(message)]
+    pub fn update_perm(&mut self, new_perm: PostPerm) -> Result<()> {
+      self.ensure_space_owner()?;
+
+      self.post_perm.set(&new_perm);
+
+      Ok(())
     }
 
     #[ink(message)]
@@ -241,6 +266,15 @@ mod posts {
         Ok(())
       } else {
         Err(Error::NotSpaceOwner)
+      }
+    }
+
+    fn ensure_post_permission(&self) -> Result<()> {
+      let permission = self.post_perm();
+
+      match permission {
+        PostPerm::SpaceOwner => self.ensure_space_owner(),
+        PostPerm::ActiveMember => self.ensure_active_member(),
       }
     }
 

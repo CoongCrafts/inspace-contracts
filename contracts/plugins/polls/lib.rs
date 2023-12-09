@@ -24,6 +24,7 @@ mod polls {
     PollNotFound,
     InvalidOptionIndex,
     VoteNotFound,
+    PollExpired,
   }
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
@@ -35,6 +36,7 @@ mod polls {
     author: AccountId,
     created_at: Timestamp,
     updated_at: Option<Timestamp>,
+    expired_at: Option<Timestamp>,
   }
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
@@ -70,7 +72,8 @@ mod polls {
 
     /// New poll
     #[ink(message)]
-    pub fn new_poll(&mut self, title: String, desc: Option<String>, options: Vec<String>) -> Result<PollId> {
+    pub fn new_poll(&mut self, title: String, desc: Option<String>,
+                    options: Vec<String>, expired_at: Option<Timestamp>) -> Result<PollId> {
       // For now, only space owner can create poll
       self.ensure_space_owner()?;
       let new_poll_id = self.polls_nonce.get_or_default();
@@ -83,6 +86,7 @@ mod polls {
         author: self.env().caller(),
         created_at: self.env().block_timestamp(),
         updated_at: None,
+        expired_at
       };
 
       self.polls.insert(new_poll_id, &new_poll);
@@ -92,8 +96,8 @@ mod polls {
     }
     /// Update poll
     #[ink(message)]
-    pub fn update_poll(&mut self, poll_id: PollId, title: Option<String>,
-                       desc: Option<String>, options: Option<Vec<String>>) -> Result<()> {
+    pub fn update_poll(&mut self, poll_id: PollId, title: Option<String>, desc: Option<String>,
+                       options: Option<Vec<String>>, expired_at: Option<Timestamp>) -> Result<()> {
       self.ensure_space_owner()?;
       let mut poll = self.polls.get(poll_id).ok_or(Error::PollNotFound)?;
 
@@ -110,6 +114,9 @@ mod polls {
 
         poll.options = values;
       }
+
+      poll.expired_at = expired_at;
+      poll.updated_at = Some(self.env().block_timestamp());
 
       self.polls.insert(poll_id, &poll);
 
@@ -158,7 +165,7 @@ mod polls {
     #[ink(message)]
     pub fn vote(&mut self, poll_id: PollId, option_index: OptionIndex) -> Result<()> {
       self.ensure_active_member()?;
-      let poll = self.polls.get(poll_id).ok_or(Error::PollNotFound)?;
+      let poll = self.ensure_active_poll(poll_id)?;
       let _ = poll.options.get(option_index as usize).ok_or(Error::InvalidOptionIndex)?;
 
       let voter = self.env().caller();
@@ -179,7 +186,8 @@ mod polls {
     #[ink(message)]
     pub fn unvote(&mut self, poll_id: PollId) -> Result<()> {
       self.ensure_active_member()?;
-      let _ = self.polls.get(poll_id).ok_or(Error::PollNotFound)?;
+      let _ = self.ensure_active_poll(poll_id)?;
+
       let voter = self.env().caller();
       let voted_option = self.votes_voters.get((poll_id, voter)).ok_or(Error::VoteNotFound)?;
       self.votes_voters.remove((poll_id, voter));
@@ -247,6 +255,18 @@ mod polls {
       } else {
         Err(Error::NotSpaceOwner)
       }
+    }
+
+    fn ensure_active_poll(&self, poll_id: PollId) -> Result<Poll> {
+      let poll = self.polls.get(poll_id).ok_or(Error::PollNotFound)?;
+
+      if let Some(expired_time) = poll.expired_at {
+        if expired_time < self.env().block_timestamp() {
+          return Err(Error::PollExpired);
+        }
+      }
+
+      Ok(poll)
     }
 
     /// Upgradeable

@@ -5,7 +5,7 @@
 </p>
 
 <h1 align="center">
-InSpace Contracts
+InSpace Ink! Contracts
 </h1>
 
 <p align="center">

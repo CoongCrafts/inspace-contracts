@@ -10,10 +10,12 @@ ink = { version = "4.3.0", default-features = false }
 scale = { package = "parity-scale-codec", version = "3", default-features = false, features = ["derive"] }
 scale-info = { version = "2.6", default-features = false, features = ["derive"], optional = true }
 
-openbrush = { git = "https://github.com/Brushfam/openbrush-contracts", tag = "4.0.0", default-features = false, features = [] }
+openbrush = { git = "https://github.com/Brushfam/openbrush-contracts", tag = "4.0.0", default-features = false, features = ['ownable', 'upgradeable'] }
 
 [lib]
+name = "shared"
 path = "src/lib.rs"
+crate-type = ["rlib"]
 
 [features]
 default = ["std"]

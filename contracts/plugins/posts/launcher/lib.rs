@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
 
-#[ink::contract]
+#[openbrush::implementation(Ownable, Upgradeable)]
+#[openbrush::contract]
 mod posts_launcher {
   use ink::ToAccountId;
   use ink::env::call::{build_create, ExecutionInput, Selector};
@@ -8,39 +9,50 @@ mod posts_launcher {
   use ink::prelude::string::String;
   use scale::{Decode, Encode};
   use posts::{PostsRef};
-  use helper_macros::*;
+  use openbrush::{modifiers, traits::Storage};
+  use shared::ensure;
+  use shared::traits::codehash::*;
 
-  #[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
+  #[derive(Encode, Decode, Debug, PartialEq, Eq)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub enum Error {
+  pub enum LauncherError {
     Custom(String),
+    OwnableError(OwnableError),
     UnAuthorized,
   }
 
-  type Result<T> = core::result::Result<T, Error>;
+  impl From<OwnableError> for LauncherError {
+    fn from(error: OwnableError) -> Self {
+      LauncherError::OwnableError(error)
+    }
+  }
+
+  type LauncherResult<T> = core::result::Result<T, LauncherError>;
   type Version = u32;
   type Nonce = u32;
 
   #[ink(storage)]
-  #[derive(Default)]
+  #[derive(Default, Storage)]
   pub struct PostsLauncher {
     motherspace_id: Lazy<AccountId>,
-    owner_id: Lazy<AccountId>,
 
     plugin_codes_nonce: Lazy<Nonce>,
     plugin_codes: Mapping<Version, Hash>,
 
     launches_count: Lazy<u32>,
+    #[storage_field]
+    ownable: ownable::Data,
   }
+
+  impl CodeHash for PostsLauncher {}
 
   impl PostsLauncher {
     #[ink(constructor)]
     pub fn new(motherspace_id: AccountId, owner_id: AccountId, plugin_code: Hash) -> Self {
       let mut one = PostsLauncher::default();
       one.motherspace_id.set(&motherspace_id);
-      one.owner_id.set(&owner_id);
-
       one.upgrade_plugin_code_impl(plugin_code);
+      ownable::Internal::_init_with_owner(&mut one, owner_id);
 
       one
     }
@@ -52,13 +64,13 @@ mod posts_launcher {
 
     /// For now, we can only upgrade plugin code via motherspace
     #[ink(message)]
-    pub fn upgrade_plugin_code(&mut self, new_code_hash: Hash) -> Result<Version> {
+    pub fn upgrade_plugin_code(&mut self, new_code_hash: Hash) -> LauncherResult<Version> {
       self.ensure_motherspace()?;
       Ok(self.upgrade_plugin_code_impl(new_code_hash))
     }
 
     #[ink(message)]
-    pub fn launch(&mut self, space_id: AccountId) -> Result<AccountId> {
+    pub fn launch(&mut self, space_id: AccountId) -> LauncherResult<AccountId> {
       let launcher_id = Self::env().account_id();
 
       let next_launches_count =
@@ -94,12 +106,7 @@ mod posts_launcher {
     pub fn motherspace_id(&self) -> AccountId {
       self.motherspace_id.get().unwrap()
     }
-
-    #[ink(message)]
-    pub fn owner_id(&self) -> AccountId {
-      self.owner_id.get().unwrap()
-    }
-
+    
     fn upgrade_plugin_code_impl(&mut self, new_plugin_code: Hash) -> Version {
       let next_plugin_code_version: Version = self.plugin_codes_nonce.get_or_default().checked_add(1).expect("Exceeds number ");
       self.plugin_codes.insert(next_plugin_code_version, &new_plugin_code);
@@ -112,33 +119,9 @@ mod posts_launcher {
       self.plugin_codes.get(self.plugin_codes_nonce.get_or_default()).unwrap()
     }
 
-
-    fn ensure_motherspace(&self) -> Result<()> {
-      ensure!(self.motherspace_id() == self.env().caller(), Error::UnAuthorized);
+    fn ensure_motherspace(&self) -> LauncherResult<()> {
+      ensure!(self.motherspace_id() == self.env().caller(), LauncherError::UnAuthorized);
       Ok(())
-    }
-
-    fn ensure_owner(&self) -> Result<()> {
-      ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
-      Ok(())
-    }
-
-    /// Upgradeable
-    #[ink(message)]
-    pub fn set_code_hash(&mut self, code_hash: Hash) -> Result<()> {
-      self.ensure_owner()?;
-
-      ::ink::env::set_code_hash2::<Environment>(&code_hash)
-        .map_err(|err| Error::Custom(::ink::prelude::format!("Failed to `set_code_hash` to {:?} due to {:?}", code_hash, err)))?;
-
-      ::ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
-
-      Ok(())
-    }
-
-    #[ink(message)]
-    pub fn code_hash(&self) -> Hash {
-      self.env().code_hash(&self.env().account_id()).unwrap()
     }
   }
 }

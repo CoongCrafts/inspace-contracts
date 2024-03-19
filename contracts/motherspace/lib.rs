@@ -1,36 +1,45 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
 
-#[ink::contract]
+#[openbrush::implementation(Ownable, Upgradeable)]
+#[openbrush::contract]
 mod motherspace {
+  use openbrush::{modifiers, traits::{Storage}};
   use ink::env::{
     DefaultEnvironment,
     call::{build_call, build_create, ExecutionInput, Selector},
   };
-  use traits::{Upgradeable};
   use ink::storage::{Lazy, Mapping};
   use ink::prelude::{format, vec::Vec, string::String};
   use ink::ToAccountId;
-  use helper_macros::*;
+  use shared::ensure;
+  use shared::traits::codehash::*;
   use space::SpaceRef;
 
-  type Result<T> = core::result::Result<T, Error>;
+  type MotherSpaceResult<T> = core::result::Result<T, MotherSpaceError>;
+
   type Nonce = u32;
   // index
   type Version = u32;
-  type CodeHash = Hash;
   type SpaceId = AccountId;
   type PluginIndex = u32;
   type PluginId = [u8; 4];
 
-  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[derive(Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub enum Error {
+  pub enum MotherSpaceError {
     Custom(String),
+    OwnableError(OwnableError),
     UnAuthorized,
     SpaceNotFound,
     PluginNotFound,
     PluginLaunchFailed,
     PluginIdExisted,
+  }
+
+  impl From<OwnableError> for MotherSpaceError {
+    fn from(error: OwnableError) -> Self {
+      MotherSpaceError::OwnableError(error)
+    }
   }
 
   #[derive(Debug, scale::Decode, scale::Encode)]
@@ -87,9 +96,9 @@ mod motherspace {
   type SpacesPage = Pagination<SpaceId>;
 
   #[ink(storage)]
-  #[derive(Default)]
+  #[derive(Default, Storage)]
   pub struct MotherSpace {
-    space_codes: Mapping<Version, CodeHash>,
+    space_codes: Mapping<Version, Hash>,
     space_codes_nonce: Lazy<Nonce>,
 
     members_to_spaces: Mapping<AccountId, Vec<SpaceId>>,
@@ -98,40 +107,42 @@ mod motherspace {
     index_to_space: Mapping<u32, SpaceId>,
     spaces_count: Lazy<u32>,
 
-    owner_id: Lazy<AccountId>,
-
     ids_to_plugin_launchers: Mapping<PluginId, AccountId>,
     plugin_launchers: Mapping<PluginIndex, PluginId>,
     plugins_nonce: Lazy<Nonce>,
+
+    #[storage_field]
+    ownable: ownable::Data,
   }
 
+  impl CodeHash for MotherSpace {}
+
   impl MotherSpace {
-    /// Constructor that initializes the `bool` value to the given `init_value`.
     #[ink(constructor)]
     pub fn new(space_code: Hash, owner_id: AccountId) -> Self {
       let mut one = MotherSpace::default();
-      one.owner_id.set(&owner_id);
+      ownable::Internal::_init_with_owner(&mut one, owner_id);
       one.upgrade_space_code_impl(space_code);
 
       one
     }
 
     #[ink(message)]
-    pub fn upgrade_space_code(&mut self, new_space_code: CodeHash) -> Result<()> {
-      self.ensure_owner()?;
+    #[modifiers(only_owner)]
+    pub fn upgrade_space_code(&mut self, new_space_code: Hash) -> MotherSpaceResult<()> {
       self.upgrade_space_code_impl(new_space_code);
 
       Ok(())
     }
 
     #[ink(message)]
-    pub fn latest_space_code(&self) -> CodeHash {
+    pub fn latest_space_code(&self) -> Hash {
       self.latest_space_code_impl()
     }
 
     #[ink(message)]
     pub fn deploy_new_space(&mut self, info: SpaceInfo, config: Option<SpaceConfig>,
-                            owner: Option<AccountId>, plugins: Option<Vec<PluginId>>) -> Result<(SpaceId, Vec<(PluginId, AccountId)>)> {
+                            owner: Option<AccountId>, plugins: Option<Vec<PluginId>>) -> MotherSpaceResult<(SpaceId, Vec<(PluginId, AccountId)>)> {
       let new_spaces_count = self.spaces_count.get_or_default();
 
       let motherspace_id = Self::env().account_id();
@@ -201,9 +212,9 @@ mod motherspace {
     }
 
     #[ink(message)]
-    pub fn add_space_member(&mut self, who: AccountId) -> Result<()> {
+    pub fn add_space_member(&mut self, who: AccountId) -> MotherSpaceResult<()> {
       let space_id = self.env().caller();
-      ensure!(self.is_deployed_space_impl(space_id), Error::Custom(String::from("Only deployed spaces can call this!")));
+      ensure!(self.is_deployed_space_impl(space_id), MotherSpaceError::Custom(String::from("Only deployed spaces can call this!")));
 
       self.add_space_member_impl(space_id, who);
 
@@ -211,9 +222,9 @@ mod motherspace {
     }
 
     #[ink(message)]
-    pub fn remove_space_member(&mut self, who: AccountId) -> Result<()> {
+    pub fn remove_space_member(&mut self, who: AccountId) -> MotherSpaceResult<()> {
       let space_id = self.env().caller();
-      ensure!(self.is_deployed_space_impl(space_id), Error::Custom(String::from("Only deployed spaces can call this!")));
+      ensure!(self.is_deployed_space_impl(space_id), MotherSpaceError::Custom(String::from("Only deployed spaces can call this!")));
 
       self.remove_space_member_impl(space_id, who);
 
@@ -236,11 +247,11 @@ mod motherspace {
     }
 
     #[ink(message)]
-    pub fn register_plugin_launcher(&mut self, plugin_id: PluginId, launcher_address: AccountId) -> Result<PluginIndex> {
+    #[modifiers(only_owner)]
+    pub fn register_plugin_launcher(&mut self, plugin_id: PluginId, launcher_address: AccountId) -> MotherSpaceResult<PluginIndex> {
       // For now only owner can register plugin launcher
       // Later we can add a mechanism for anyone can submit a plugin application for approval
-      self.ensure_owner()?;
-      ensure!(!self.ids_to_plugin_launchers.contains(plugin_id), Error::PluginIdExisted);
+      ensure!(!self.ids_to_plugin_launchers.contains(plugin_id), MotherSpaceError::PluginIdExisted);
 
       let new_plugin_id = self.plugins_nonce.get_or_default();
       self.plugin_launchers.insert(new_plugin_id, &plugin_id);
@@ -252,10 +263,10 @@ mod motherspace {
 
     /// Update plugin launcher address or remove it
     // #[ink(message)]
-    // pub fn update_plugin_launcher(&mut self, plugin_id: PluginId, launcher_address: Option<AccountId>) -> Result<()> {
-    //   self.ensure_owner()?;
+    // [modifiers(only_owner)]
+    // pub fn update_plugin_launcher(&mut self, plugin_id: PluginId, launcher_address: Option<AccountId>) -> MotherSpaceResult<()> {
     //   let ZERO_ACCOUNT: AccountId = [0; 32].into();
-    //   ensure!(self.ids_to_plugin_launchers.contains(plugin_id), Error::PluginNotFound);
+    //   ensure!(self.ids_to_plugin_launchers.contains(plugin_id), MotherSpaceError::PluginNotFound);
     //   let new_address = launcher_address.unwrap_or(ZERO_ACCOUNT);
     //   self.ids_to_plugin_launchers.insert(plugin_id, &new_address);
     //
@@ -278,9 +289,10 @@ mod motherspace {
 
       launchers
     }
+
     #[ink(message)]
-    pub fn latest_plugin_code(&self, plugin_id: PluginId) -> Result<CodeHash> {
-      let launcher = self.ids_to_plugin_launchers.get(plugin_id).ok_or(Error::PluginNotFound)?;
+    pub fn latest_plugin_code(&self, plugin_id: PluginId) -> MotherSpaceResult<Hash> {
+      let launcher = self.ids_to_plugin_launchers.get(plugin_id).ok_or(MotherSpaceError::PluginNotFound)?;
 
       let result = build_call::<DefaultEnvironment>()
         .call(launcher)
@@ -288,16 +300,16 @@ mod motherspace {
         .exec_input(
           ExecutionInput::new(Selector::new(ink::selector_bytes!("latest_plugin_code")))
         )
-        .returns::<CodeHash>()
+        .returns::<Hash>()
         .invoke();
 
       Ok(result)
     }
 
     #[ink(message)]
-    pub fn upgrade_plugin_code(&mut self, plugin_id: PluginId, new_code_hash: CodeHash) -> Result<Version> {
-      self.ensure_owner()?;
-      let launcher = self.ids_to_plugin_launchers.get(plugin_id).ok_or(Error::PluginNotFound)?;
+    #[modifiers(only_owner)]
+    pub fn upgrade_plugin_code(&mut self, plugin_id: PluginId, new_code_hash: Hash) -> MotherSpaceResult<Version> {
+      let launcher = self.ids_to_plugin_launchers.get(plugin_id).ok_or(MotherSpaceError::PluginNotFound)?;
 
       let new_version = build_call::<DefaultEnvironment>()
         .call(launcher)
@@ -315,9 +327,9 @@ mod motherspace {
 
     /// Install plugins
     #[ink(message)]
-    pub fn install_plugins(&mut self, space_id: SpaceId, plugins: Vec<PluginId>) -> Result<Vec<(PluginId, AccountId)>> {
+    pub fn install_plugins(&mut self, space_id: SpaceId, plugins: Vec<PluginId>) -> MotherSpaceResult<Vec<(PluginId, AccountId)>> {
       if !self.is_deployed_space(space_id) {
-        return Err(Error::SpaceNotFound);
+        return Err(MotherSpaceError::SpaceNotFound);
       }
 
       // Ensure space owner
@@ -330,12 +342,12 @@ mod motherspace {
         .returns::<AccountId>()
         .invoke();
 
-      ensure!(space_owner_id == self.env().caller(), Error::UnAuthorized);
+      ensure!(space_owner_id == self.env().caller(), MotherSpaceError::UnAuthorized);
 
       self.install_plugins_impl(space_id, plugins)
     }
 
-    fn install_plugins_impl(&mut self, space_id: SpaceId, plugins: Vec<PluginId>) -> Result<Vec<(PluginId, AccountId)>> {
+    fn install_plugins_impl(&mut self, space_id: SpaceId, plugins: Vec<PluginId>) -> MotherSpaceResult<Vec<(PluginId, AccountId)>> {
       let mut deployed_plugins: Vec<(PluginId, AccountId)> = Vec::new();
       for plugin_id in plugins {
         let opt_launcher = self.ids_to_plugin_launchers.get(plugin_id);
@@ -347,13 +359,13 @@ mod motherspace {
               ExecutionInput::new(Selector::new(ink::selector_bytes!("launch")))
                 .push_arg(space_id)
             )
-            .returns::<Result<AccountId>>()
+            .returns::<MotherSpaceResult<AccountId>>()
             .invoke();
 
           if let Ok(plugin_address) = plugin_address_rs {
             deployed_plugins.push((plugin_id, plugin_address));
           } else {
-            return Err(Error::PluginLaunchFailed);
+            return Err(MotherSpaceError::PluginLaunchFailed);
           }
         }
       }
@@ -371,30 +383,17 @@ mod motherspace {
           ExecutionInput::new(Selector::new(ink::selector_bytes!("attach_plugins")))
             .push_arg(&deployed_plugins)
         )
-        .returns::<Result<()>>()
+        .returns::<MotherSpaceResult<()>>()
         .invoke();
 
       if result.is_ok() {
         Ok(deployed_plugins)
       } else {
-        Err(Error::Custom(format!("Attach plugin failed, error: {:?}", result.unwrap_err())))
+        Err(MotherSpaceError::Custom(format!("Attach plugin failed, error: {:?}", result.unwrap_err())))
       }
     }
 
-    #[ink(message)]
-    pub fn owner_id(&self) -> AccountId {
-      self.owner_id.get().unwrap()
-    }
-
-    #[ink(message)]
-    pub fn transfer_ownership(&mut self, who: AccountId) -> Result<()> {
-      self.ensure_owner()?;
-      self.owner_id.set(&who);
-
-      Ok(())
-    }
-
-    fn latest_space_code_impl(&self) -> CodeHash {
+    fn latest_space_code_impl(&self) -> Hash {
       self.space_codes.get(self.space_codes_nonce.get_or_default()).unwrap()
     }
 
@@ -418,35 +417,10 @@ mod motherspace {
       }
     }
 
-    fn upgrade_space_code_impl(&mut self, new_space_code: CodeHash) {
+    fn upgrade_space_code_impl(&mut self, new_space_code: Hash) {
       let next_space_code_version: Version = self.space_codes_nonce.get_or_default().checked_add(1).expect("Cannot upgrade space code!");
       self.space_codes.insert(next_space_code_version, &new_space_code);
       self.space_codes_nonce.set(&next_space_code_version);
-    }
-
-    fn ensure_owner(&self) -> Result<()> {
-      ensure!(self.owner_id() == self.env().caller(), Error::UnAuthorized);
-
-      Ok(())
-    }
-  }
-
-  impl Upgradeable for MotherSpace {
-    #[ink(message)]
-    fn set_code_hash(&mut self, code_hash: Hash) {
-      assert_eq!(self.owner_id(), Self::env().caller(), "UnAuthorized");
-      ::ink::env::set_code_hash2::<Environment>(&code_hash).unwrap_or_else(|err| {
-        panic!(
-          "Failed to `set_code_hash` to {:?} due to {:?}",
-          code_hash, err
-        )
-      });
-      ::ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
-    }
-
-    #[ink(message)]
-    fn code_hash(&self) -> Hash {
-      self.env().code_hash(&self.env().account_id()).unwrap()
     }
   }
 }

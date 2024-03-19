@@ -2,24 +2,28 @@
 
 pub use space::{SpaceRef};
 
-#[ink::contract]
+#[openbrush::implementation(Ownable, Upgradeable)]
+#[openbrush::contract]
 mod space {
   use ink::env::call::{build_call, ExecutionInput, Selector};
   use ink::env::{DefaultEnvironment};
   use ink::storage::{Mapping, Lazy};
   use ink::prelude::string::String;
   use ink::prelude::vec::Vec;
-  use helper_macros::*;
+  use openbrush::{modifiers, traits::Storage};
+  use shared::ensure;
+  use shared::traits::codehash::*;
 
-  type Result<T> = core::result::Result<T, Error>;
+  type SpaceResult<T> = core::result::Result<T, SpaceError>;
 
   const SECS_PER_DAY: u64 = 24 * 60 * 60;
   const MAX_PENDING_REQUESTS: u64 = 500;
 
-  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[derive(Debug, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub enum Error {
+  pub enum SpaceError {
     Custom(String),
+    OwnableError(OwnableError),
     UnAuthorized,
     MemberExisted(AccountId),
     InsufficientPayment,
@@ -27,6 +31,12 @@ mod space {
     NotActiveMember,
     MemberNotFound,
     PluginNotFound,
+  }
+
+  impl From<OwnableError> for SpaceError {
+    fn from(error: OwnableError) -> Self {
+      SpaceError::OwnableError(error)
+    }
   }
 
   #[derive(Clone, Debug, PartialEq, scale::Decode, scale::Encode)]
@@ -80,13 +90,6 @@ mod space {
         _ => None,
       }
     }
-  }
-
-  #[derive(Debug, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
-  pub struct SpaceOwnable {
-    motherspace_id: AccountId,
-    owner_id: AccountId,
   }
 
   #[derive(Clone, Debug, Default, scale::Decode, scale::Encode)]
@@ -163,11 +166,10 @@ mod space {
   }
 
   #[ink(storage)]
-  #[derive(Default)]
+  #[derive(Default, Storage)]
   pub struct Space {
     info: Lazy<SpaceInfo>,
     config: Lazy<SpaceConfig>,
-    ownable: Lazy<SpaceOwnable>,
 
     // Membership
     members_nonce: Lazy<u32>,
@@ -184,27 +186,34 @@ mod space {
     plugins: Mapping<PluginId, AccountId>,
     disabled_plugin_ids: Lazy<Vec<PluginId>>,
     plugin_ids: Lazy<Vec<PluginId>>,
+
+    #[storage_field]
+    ownable: ownable::Data,
+    motherspace_id: Lazy<AccountId>,
   }
+
+  impl CodeHash for Space {}
 
   impl Space {
     #[ink(constructor)]
     pub fn new(motherspace_id: AccountId,
                owner_id: AccountId,
                space_info: SpaceInfo,
-               config: Option<SpaceConfig>) -> Result<Self> {
-      ensure!(motherspace_id == Self::env().caller(), Error::Custom(String::from("Only MotherSpace can deploy spaces!")));
-      ensure!(space_info.name.len() <= 30, Error::Custom(String::from("Space name is at max 30 chars")));
-      ensure!(space_info.name.len() >= 3, Error::Custom(String::from("Space name must be at least 3 chars")));
+               config: Option<SpaceConfig>) -> SpaceResult<Self> {
+      ensure!(motherspace_id == Self::env().caller(), SpaceError::Custom(String::from("Only MotherSpace can deploy spaces!")));
+      ensure!(space_info.name.len() <= 30, SpaceError::Custom(String::from("Space name is at max 30 chars")));
+      ensure!(space_info.name.len() >= 3, SpaceError::Custom(String::from("Space name must be at least 3 chars")));
 
       if let Some(desc) = space_info.desc.clone() {
-        ensure!(desc.len() <= 200, Error::Custom(String::from("Space description is at max 100 chars")));
+        ensure!(desc.len() <= 200, SpaceError::Custom(String::from("Space description is at max 100 chars")));
       }
 
       let mut instance = Space::default();
 
       instance.info.set(&space_info);
-      instance.ownable.set(&SpaceOwnable { motherspace_id, owner_id });
       instance.config.set(&Self::normalize_config(config));
+      instance.motherspace_id.set(&motherspace_id);
+      ownable::Internal::_init_with_owner(&mut instance, owner_id);
 
       instance.do_grant_membership(owner_id, None, false)?;
 
@@ -213,11 +222,11 @@ mod space {
 
     /// Attach plugins to space, motherspace call this when install plugins for spaces
     #[ink(message)]
-    pub fn attach_plugins(&mut self, plugins: Vec<(PluginId, AccountId)>) -> Result<()> {
-      ensure!(self.motherspace_id() == Self::env().caller(), Error::Custom(String::from("Only MotherSpace can attach plugins!")));
+    pub fn attach_plugins(&mut self, plugins: Vec<(PluginId, AccountId)>) -> SpaceResult<()> {
+      ensure!(self.motherspace_id() == Self::env().caller(), SpaceError::Custom(String::from("Only MotherSpace can attach plugins!")));
 
       if plugins.iter().any(|&p| self.plugins.contains(p.0)) {
-        return Err(Error::Custom(String::from("Cannot attach a plugin more than one.")));
+        return Err(SpaceError::Custom(String::from("Cannot attach a plugin more than one.")));
       }
 
       let mut plugin_ids = self.plugin_ids.get_or_default();
@@ -244,9 +253,9 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn enable_plugin(&mut self, plugin_id: PluginId) -> Result<()> {
-      self.ensure_owner()?;
-      ensure!(self.plugin_ids.get_or_default().contains(&plugin_id), Error::PluginNotFound);
+    #[modifiers(only_owner)]
+    pub fn enable_plugin(&mut self, plugin_id: PluginId) -> SpaceResult<()> {
+      ensure!(self.plugin_ids.get_or_default().contains(&plugin_id), SpaceError::PluginNotFound);
 
       let mut disabled_ids = self.disabled_plugin_ids.get_or_default();
       disabled_ids.retain(|&x| x != plugin_id);
@@ -256,10 +265,10 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn disable_plugin(&mut self, plugin_id: PluginId) -> Result<()> {
-      self.ensure_owner()?;
+    #[modifiers(only_owner)]
+    pub fn disable_plugin(&mut self, plugin_id: PluginId) -> SpaceResult<()> {
       let plugin_ids = self.plugin_ids.get_or_default();
-      ensure!(plugin_ids.contains(&plugin_id), Error::PluginNotFound);
+      ensure!(plugin_ids.contains(&plugin_id), SpaceError::PluginNotFound);
 
       let mut disabled_ids = self.disabled_plugin_ids.get_or_default();
       if !disabled_ids.contains(&plugin_id) {
@@ -271,10 +280,10 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn plugin_code_hash(&mut self, plugin_id: PluginId) -> Result<Hash> {
+    pub fn plugin_code_hash(&mut self, plugin_id: PluginId) -> SpaceResult<Hash> {
       let plugin_ids = self.plugin_ids.get_or_default();
-      ensure!(plugin_ids.contains(&plugin_id), Error::PluginNotFound);
-      let plugin_address = self.plugins.get(plugin_id).ok_or(Error::PluginNotFound)?;
+      ensure!(plugin_ids.contains(&plugin_id), SpaceError::PluginNotFound);
+      let plugin_address = self.plugins.get(plugin_id).ok_or(SpaceError::PluginNotFound)?;
 
       let code_hash = build_call::<DefaultEnvironment>()
         .call(plugin_address)
@@ -321,17 +330,17 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn grant_membership(&mut self, who: AccountId, ttl: Option<u64>) -> Result<()> {
+    #[modifiers(only_owner)]
+    pub fn grant_membership(&mut self, who: AccountId, ttl: Option<u64>) -> SpaceResult<()> {
       // TODO add role based access, so admin can also grant memberships
       // TODO grant multiple membership on one go
-      self.ensure_owner()?;
 
       self.do_grant_membership(who, ttl, true)
     }
 
-    fn do_grant_membership(&mut self, who: AccountId, ttl: Option<u64>, register_space_member: bool) -> Result<()> {
+    fn do_grant_membership(&mut self, who: AccountId, ttl: Option<u64>, register_space_member: bool) -> SpaceResult<()> {
       let member_status = self.member_status(who);
-      ensure!(member_status != MemberStatus::Active, Error::MemberExisted(who));
+      ensure!(member_status != MemberStatus::Active, SpaceError::MemberExisted(who));
 
       let current_timestamp = Self::env().block_timestamp();
       let next_renewal_at = ttl.map(|val|
@@ -370,7 +379,7 @@ mod space {
             ExecutionInput::new(Selector::new(ink::selector_bytes!("add_space_member")))
               .push_arg(who)
           )
-          .returns::<Result<()>>()
+          .returns::<SpaceResult<()>>()
           .invoke();
       }
 
@@ -379,12 +388,12 @@ mod space {
 
     /// pay to join
     #[ink(message, payable)]
-    pub fn pay_to_join(&mut self, who: Option<AccountId>) -> Result<()> {
+    pub fn pay_to_join(&mut self, who: Option<AccountId>) -> SpaceResult<()> {
       let config = self.config();
-      ensure!(config.registration == RegistrationType::PayToJoin, Error::Custom(String::from("Space doesn't support pay to join!")));
+      ensure!(config.registration == RegistrationType::PayToJoin, SpaceError::Custom(String::from("Space doesn't support pay to join!")));
 
       let registrant = who.unwrap_or(self.env().caller());
-      ensure!(!self.is_member(Some(registrant)), Error::MemberExisted(registrant));
+      ensure!(!self.is_member(Some(registrant)), SpaceError::MemberExisted(registrant));
 
       let paid_balance: Balance = self.env().transferred_value();
 
@@ -394,7 +403,7 @@ mod space {
         Pricing::Subscription { price, .. } => paid_balance >= price
       };
 
-      ensure!(valid_payment, Error::InsufficientPayment);
+      ensure!(valid_payment, SpaceError::InsufficientPayment);
 
       self.do_grant_membership(registrant, config.ttl(), true)
     }
@@ -403,15 +412,15 @@ mod space {
 
     /// Register for membership
     #[ink(message, payable)]
-    pub fn register_membership(&mut self, who: Option<AccountId>) -> Result<()> {
+    pub fn register_membership(&mut self, who: Option<AccountId>) -> SpaceResult<()> {
       let config = self.config();
       ensure!(
         config.registration == RegistrationType::RequestToJoin,
-        Error::Custom(String::from("Space doesn't support request to join!"))
+        SpaceError::Custom(String::from("Space doesn't support request to join!"))
       );
 
       let registrant = who.unwrap_or(Self::env().caller());
-      ensure!(!self.is_member(Some(registrant)), Error::MemberExisted(registrant));
+      ensure!(!self.is_member(Some(registrant)), SpaceError::MemberExisted(registrant));
 
       let mut pending_requests = self.pending_requests.get_or_default();
 
@@ -419,13 +428,13 @@ mod space {
       if let Some(existing_request_id) = maybe_request_id {
         ensure!(
           !pending_requests.contains(&existing_request_id),
-          Error::Custom(String::from("The registrant is already having a pending request!"))
+          SpaceError::Custom(String::from("The registrant is already having a pending request!"))
         );
       }
 
       ensure!(
         pending_requests.len() as u64 <= MAX_PENDING_REQUESTS,
-        Error::Custom(String::from("Exceeding maximum of pending requests"))
+        SpaceError::Custom(String::from("Exceeding maximum of pending requests"))
       );
 
       let next_request_id = self.requests_nonce.get_or_default().checked_add(1).expect("Exceeding number of requests!");
@@ -437,7 +446,7 @@ mod space {
         Pricing::Subscription { price, .. } => paid_balance >= price
       };
 
-      ensure!(valid_payment, Error::InsufficientPayment);
+      ensure!(valid_payment, SpaceError::InsufficientPayment);
 
       self.requests_nonce.set(&next_request_id);
 
@@ -490,17 +499,17 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn cancel_request(&mut self) -> Result<()> {
+    pub fn cancel_request(&mut self) -> SpaceResult<()> {
       let caller = self.env().caller();
 
       let maybe_request = self.get_membership_request(caller);
-      ensure!(maybe_request.is_some(), Error::Custom(String::from("Request Not Found")));
+      ensure!(maybe_request.is_some(), SpaceError::Custom(String::from("Request Not Found")));
 
       let (request_id, request) = maybe_request.unwrap();
 
       // Refund the payment
       if self.env().transfer(caller, request.paid).is_err() {
-        return Err(Error::CannotRefundPayment(request.who, request_id));
+        return Err(SpaceError::CannotRefundPayment(request.who, request_id));
       }
 
       let mut pending_requests = self.pending_requests.get_or_default();
@@ -553,9 +562,8 @@ mod space {
 
     /// Submit request approvals
     #[ink(message)]
-    pub fn submit_request_approvals(&mut self, approvals: Vec<RequestApproval>) -> Result<ApprovalSubmissionResult> {
-      self.ensure_owner()?;
-
+    #[modifiers(only_owner)]
+    pub fn submit_request_approvals(&mut self, approvals: Vec<RequestApproval>) -> SpaceResult<ApprovalSubmissionResult> {
       let mut approved_count: u32 = 0;
       let mut rejected_count: u32 = 0;
       let mut not_found_count: u32 = 0;
@@ -573,7 +581,7 @@ mod space {
           } else if self.env().transfer(request.who, request.paid).is_ok() {
             rejected_count = rejected_count.saturating_add(1);
           } else {
-            return Err(Error::CannotRefundPayment(request.who, request_id));
+            return Err(SpaceError::CannotRefundPayment(request.who, request_id));
           }
 
           // update the approval
@@ -629,13 +637,13 @@ mod space {
     /// Later we can consider allow owner to do this
     /// or a voting mechanism to force a member to leave
     #[ink(message)]
-    pub fn leave(&mut self) -> Result<()> {
+    pub fn leave(&mut self) -> SpaceResult<()> {
       let who = self.env().caller();
 
-      ensure!(who != self.owner_id(), Error::Custom(String::from("Owner cannot leave the space")));
+      ensure!(who != Ownable::owner(self).unwrap(), SpaceError::Custom(String::from("Owner cannot leave the space")));
 
       let member_status = self.member_status(who);
-      ensure!(member_status == MemberStatus::Active, Error::NotActiveMember);
+      ensure!(member_status == MemberStatus::Active, SpaceError::NotActiveMember);
       let mut member_info = self.members.get(who).unwrap();
       member_info.next_renewal_at = Some(0);
 
@@ -649,7 +657,7 @@ mod space {
           ExecutionInput::new(Selector::new(ink::selector_bytes!("remove_space_member")))
             .push_arg(who)
         )
-        .returns::<Result<()>>()
+        .returns::<SpaceResult<()>>()
         .invoke();
 
       Ok(())
@@ -668,27 +676,10 @@ mod space {
       }
     }
 
-    /// Get owner id
-    #[ink(message)]
-    pub fn owner_id(&self) -> AccountId {
-      self.ownable.get().unwrap().owner_id
-    }
-
-    #[ink(message)]
-    pub fn transfer_ownership(&mut self, who: AccountId) -> Result<()> {
-      self.ensure_owner()?;
-      let mut ownable = self.ownable.get().unwrap();
-      ownable.owner_id = who;
-
-      self.ownable.set(&ownable);
-
-      Ok(())
-    }
-
     /// Get motherspace id
     #[ink(message)]
     pub fn motherspace_id(&self) -> AccountId {
-      self.ownable.get().unwrap().motherspace_id
+      self.motherspace_id.get().unwrap()
     }
 
     /// Get space info
@@ -698,8 +689,8 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn update_info(&mut self, info: SpaceInfo) -> Result<()> {
-      self.ensure_owner()?;
+    #[modifiers(only_owner)]
+    pub fn update_info(&mut self, info: SpaceInfo) -> SpaceResult<()> {
       // TODO validate to limit maximum of chars for each field
       self.info.set(&info);
 
@@ -712,8 +703,8 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn update_config(&mut self, config: SpaceConfig) -> Result<()> {
-      self.ensure_owner()?;
+    #[modifiers(only_owner)]
+    pub fn update_config(&mut self, config: SpaceConfig) -> SpaceResult<()> {
       self.config.set(&Self::normalize_config(Some(config)));
 
       Ok(())
@@ -727,13 +718,13 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn update_member_info(&mut self, name: Option<String>) -> Result<()> {
+    pub fn update_member_info(&mut self, name: Option<String>) -> SpaceResult<()> {
       let caller = self.env().caller();
 
-      ensure!(self.check_active_member(&caller), Error::NotActiveMember);
+      ensure!(self.check_active_member(&caller), SpaceError::NotActiveMember);
       if let Some(new_name) = &name {
-        ensure!(new_name.len() >= 3, Error::Custom(String::from("Display name must be a least 3 characters")));
-        ensure!(new_name.len() <= 30, Error::Custom(String::from("Display name must be at most 30 characters")));
+        ensure!(new_name.len() >= 3, SpaceError::Custom(String::from("Display name must be a least 3 characters")));
+        ensure!(new_name.len() <= 30, SpaceError::Custom(String::from("Display name must be at most 30 characters")));
       }
 
       let updated_member_info = self
@@ -772,12 +763,6 @@ mod space {
       }
     }
 
-    fn ensure_owner(&self) -> Result<()> {
-      ensure!(self.env().caller() == self.owner_id(), Error::UnAuthorized);
-
-      Ok(())
-    }
-
     fn is_member(&self, who: Option<AccountId>) -> bool {
       let who = who.unwrap_or(self.env().caller());
       let member_status = self.member_status(who);
@@ -786,24 +771,24 @@ mod space {
     }
   }
 
-  use traits::Upgradeable;
+  // use traits::Upgradeable;
 
-  impl Upgradeable for Space {
-    #[ink(message)]
-    fn set_code_hash(&mut self, code_hash: Hash) {
-      assert_eq!(self.owner_id(), Self::env().caller(), "UnAuthorized");
-      ink::env::set_code_hash2::<Environment>(&code_hash).unwrap_or_else(|err| {
-        panic!(
-          "Failed to `set_code_hash` to {:?} due to {:?}",
-          code_hash, err
-        )
-      });
-      ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
-    }
-
-    #[ink(message)]
-    fn code_hash(&self) -> Hash {
-      self.env().code_hash(&self.env().account_id()).unwrap()
-    }
-  }
+  // impl Upgradeable for Space {
+  //   #[ink(message)]
+  //   fn set_code_hash(&mut self, code_hash: Hash) {
+  //     assert_eq!(self.owner_id(), Self::env().caller(), "UnAuthorized");
+  //     ink::env::set_code_hash2::<Environment>(&code_hash).unwrap_or_else(|err| {
+  //       panic!(
+  //         "Failed to `set_code_hash` to {:?} due to {:?}",
+  //         code_hash, err
+  //       )
+  //     });
+  //     ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
+  //   }
+  //
+  //   #[ink(message)]
+  //   fn code_hash(&self) -> Hash {
+  //     self.env().code_hash(&self.env().account_id()).unwrap()
+  //   }
+  // }
 }

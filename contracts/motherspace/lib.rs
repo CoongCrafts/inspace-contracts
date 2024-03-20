@@ -13,6 +13,7 @@ mod motherspace {
   use ink::ToAccountId;
   use shared::ensure;
   use shared::traits::codehash::*;
+  use shared::traits::space_profile::*;
   use space::SpaceRef;
 
   type MotherSpaceResult<T> = core::result::Result<T, MotherSpaceError>;
@@ -40,47 +41,6 @@ mod motherspace {
     fn from(error: OwnableError) -> Self {
       MotherSpaceError::OwnableError(error)
     }
-  }
-
-  #[derive(Debug, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub enum ImageSource {
-    IpfsCid(String),
-    Url(String),
-  }
-
-  #[derive(Debug, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub struct SpaceInfo {
-    name: String,
-    desc: Option<String>,
-    logo: Option<ImageSource>,
-  }
-
-  #[derive(Clone, Debug, Copy, Default, PartialEq, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub enum RegistrationType {
-    #[default]
-    PayToJoin,
-    RequestToJoin,
-    InviteOnly,
-    // ClaimWithNFT,
-  }
-
-  #[derive(Clone, Debug, Copy, Default, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub enum Pricing {
-    #[default]
-    Free,
-    OneTimePaid { price: Balance },
-    Subscription { price: Balance, duration: u32 }, // duration is in days
-  }
-
-  #[derive(Debug, Default, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub struct SpaceConfig {
-    registration: RegistrationType,
-    pricing: Pricing,
   }
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]

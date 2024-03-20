@@ -13,84 +13,11 @@ mod space {
   use openbrush::{modifiers, traits::Storage};
   use shared::ensure;
   use shared::traits::codehash::*;
+  use shared::traits::space_profile::*;
 
   type SpaceResult<T> = core::result::Result<T, SpaceError>;
 
-  const SECS_PER_DAY: u64 = 24 * 60 * 60;
   const MAX_PENDING_REQUESTS: u64 = 500;
-
-  #[derive(Debug, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub enum SpaceError {
-    Custom(String),
-    OwnableError(OwnableError),
-    UnAuthorized,
-    MemberExisted(AccountId),
-    InsufficientPayment,
-    CannotRefundPayment(AccountId, RequestId),
-    NotActiveMember,
-    MemberNotFound,
-    PluginNotFound,
-  }
-
-  impl From<OwnableError> for SpaceError {
-    fn from(error: OwnableError) -> Self {
-      SpaceError::OwnableError(error)
-    }
-  }
-
-  #[derive(Clone, Debug, PartialEq, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
-  pub enum ImageSource {
-    IpfsCid(String),
-    Url(String),
-  }
-
-  #[derive(Debug, Default, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
-  pub struct SpaceInfo {
-    name: String,
-    desc: Option<String>,
-    logo: Option<ImageSource>,
-  }
-
-  #[derive(Clone, Debug, Copy, Default, PartialEq, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
-  pub enum RegistrationType {
-    #[default]
-    PayToJoin,
-    RequestToJoin,
-    InviteOnly,
-    // ClaimWithNFT,
-  }
-
-  #[derive(Clone, Debug, Copy, Default, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
-  pub enum Pricing {
-    #[default]
-    Free,
-    OneTimePaid { price: Balance },
-    Subscription { price: Balance, duration: u32 }, // duration is in days
-  }
-
-  #[derive(Debug, Default, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
-  pub struct SpaceConfig {
-    registration: RegistrationType,
-    pricing: Pricing,
-  }
-
-  impl SpaceConfig {
-    /// Calculate time to live (ttl) for a membership
-    /// None -> Non expiring
-    /// Some -> Expiring in seconds from the approved time
-    fn ttl(&self) -> Option<u64> {
-      match self.pricing {
-        Pricing::Subscription { duration, .. } => Some(SECS_PER_DAY.saturating_mul(duration as u64)),
-        _ => None,
-      }
-    }
-  }
 
   #[derive(Clone, Debug, Default, scale::Decode, scale::Encode)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
@@ -168,8 +95,8 @@ mod space {
   #[ink(storage)]
   #[derive(Default, Storage)]
   pub struct Space {
-    info: Lazy<SpaceInfo>,
-    config: Lazy<SpaceConfig>,
+    #[storage_field]
+    profile: space_profile::Data,
 
     // Membership
     members_nonce: Lazy<u32>,
@@ -193,6 +120,7 @@ mod space {
   }
 
   impl CodeHash for Space {}
+  impl SpaceProfile for Space {}
 
   impl Space {
     #[ink(constructor)]
@@ -201,20 +129,13 @@ mod space {
                space_info: SpaceInfo,
                config: Option<SpaceConfig>) -> SpaceResult<Self> {
       ensure!(motherspace_id == Self::env().caller(), SpaceError::Custom(String::from("Only MotherSpace can deploy spaces!")));
-      ensure!(space_info.name.len() <= 30, SpaceError::Custom(String::from("Space name is at max 30 chars")));
-      ensure!(space_info.name.len() >= 3, SpaceError::Custom(String::from("Space name must be at least 3 chars")));
-
-      if let Some(desc) = space_info.desc.clone() {
-        ensure!(desc.len() <= 200, SpaceError::Custom(String::from("Space description is at max 100 chars")));
-      }
 
       let mut instance = Space::default();
 
-      instance.info.set(&space_info);
-      instance.config.set(&Self::normalize_config(config));
-      instance.motherspace_id.set(&motherspace_id);
+      space_profile::SpaceProfile::_init(&mut instance, space_info, config)?;
       ownable::Internal::_init_with_owner(&mut instance, owner_id);
 
+      instance.motherspace_id.set(&motherspace_id);
       instance.do_grant_membership(owner_id, None, false)?;
 
       Ok(instance)
@@ -576,7 +497,7 @@ mod space {
 
           if approved {
             // TODO we should return a list of successful, failed items
-            self.do_grant_membership(request.who, self.config.get_or_default().ttl(), true)?;
+            self.do_grant_membership(request.who, self.profile.config.get_or_default().ttl(), true)?;
             approved_count = approved_count.saturating_add(1);
           } else if self.env().transfer(request.who, request.paid).is_ok() {
             rejected_count = rejected_count.saturating_add(1);
@@ -682,35 +603,6 @@ mod space {
       self.motherspace_id.get().unwrap()
     }
 
-    /// Get space info
-    #[ink(message)]
-    pub fn info(&self) -> SpaceInfo {
-      self.info.get().unwrap()
-    }
-
-    #[ink(message)]
-    #[modifiers(only_owner)]
-    pub fn update_info(&mut self, info: SpaceInfo) -> SpaceResult<()> {
-      // TODO validate to limit maximum of chars for each field
-      self.info.set(&info);
-
-      Ok(())
-    }
-
-    #[ink(message)]
-    pub fn config(&self) -> SpaceConfig {
-      self.config.get().unwrap_or(Self::default_config())
-    }
-
-    #[ink(message)]
-    #[modifiers(only_owner)]
-    pub fn update_config(&mut self, config: SpaceConfig) -> SpaceResult<()> {
-      self.config.set(&Self::normalize_config(Some(config)));
-
-      Ok(())
-    }
-
-
     /// Member info
     #[ink(message)]
     pub fn member_info(&self, who: AccountId) -> Option<MemberInfo> {
@@ -741,28 +633,6 @@ mod space {
       Ok(())
     }
 
-    fn default_config() -> SpaceConfig {
-      SpaceConfig {
-        registration: RegistrationType::PayToJoin,
-        pricing: Pricing::Free,
-      }
-    }
-
-    fn normalize_config(maybe_config: Option<SpaceConfig>) -> SpaceConfig {
-      match maybe_config {
-        Some(mut one) => {
-          // Invite only mode only accept free pricing
-          // We can later allow payment but this is good for now.
-          if one.registration == RegistrationType::InviteOnly {
-            one.pricing = Pricing::Free;
-          }
-
-          one
-        }
-        None => Self::default_config()
-      }
-    }
-
     fn is_member(&self, who: Option<AccountId>) -> bool {
       let who = who.unwrap_or(self.env().caller());
       let member_status = self.member_status(who);
@@ -770,25 +640,4 @@ mod space {
       member_status == MemberStatus::Active || member_status == MemberStatus::Inactive
     }
   }
-
-  // use traits::Upgradeable;
-
-  // impl Upgradeable for Space {
-  //   #[ink(message)]
-  //   fn set_code_hash(&mut self, code_hash: Hash) {
-  //     assert_eq!(self.owner_id(), Self::env().caller(), "UnAuthorized");
-  //     ink::env::set_code_hash2::<Environment>(&code_hash).unwrap_or_else(|err| {
-  //       panic!(
-  //         "Failed to `set_code_hash` to {:?} due to {:?}",
-  //         code_hash, err
-  //       )
-  //     });
-  //     ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
-  //   }
-  //
-  //   #[ink(message)]
-  //   fn code_hash(&self) -> Hash {
-  //     self.env().code_hash(&self.env().account_id()).unwrap()
-  //   }
-  // }
 }

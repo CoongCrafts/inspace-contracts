@@ -1504,11 +1504,12 @@ name = "flipper_launcher"
 version = "0.1.0"
 dependencies = [
  "flipper",
- "helper_macros",
  "ink",
  "ink_e2e",
+ "openbrush",
  "parity-scale-codec",
  "scale-info",
+ "shared",
 ]
 
 [[package]]
@@ -3315,12 +3316,13 @@ dependencies = [
 name = "polls_launcher"
 version = "0.1.0"
 dependencies = [
- "helper_macros",
  "ink",
  "ink_e2e",
+ "openbrush",
  "parity-scale-codec",
  "polls",
  "scale-info",
+ "shared",
 ]
 
 [[package]]

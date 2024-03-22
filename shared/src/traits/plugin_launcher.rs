@@ -1,6 +1,5 @@
 use ink::prelude::string::String;
 use openbrush::{
-  modifiers,
   traits::{
     AccountId,
     Storage,

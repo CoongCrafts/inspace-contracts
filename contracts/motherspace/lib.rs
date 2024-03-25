@@ -53,7 +53,7 @@ mod motherspace {
     total: u32,
   }
 
-  type SpacesPage = Pagination<SpaceId>;
+  type SpacesPage = Pagination<(SpaceId, Hash)>;
 
   #[ink(storage)]
   #[derive(Default, Storage)]
@@ -152,7 +152,7 @@ mod motherspace {
       for index in (from as usize)..(last_position.min(current_spaces_count) as usize) {
         let bounded_index = index as u32;
         if let Some(space_id) = self.index_to_space.get(bounded_index) {
-          space_records.push(space_id)
+          space_records.push((space_id, self._space_code_hash(space_id)))
         }
       }
 
@@ -166,9 +166,24 @@ mod motherspace {
     }
 
     #[ink(message)]
-    pub fn member_spaces(&self, who: Option<AccountId>) -> Vec<SpaceId> {
+    pub fn member_spaces(&self, who: Option<AccountId>) -> Vec<(SpaceId, Hash)> {
       let who = who.unwrap_or(self.env().caller());
-      self.members_to_spaces.get(who).unwrap_or_default()
+      let space_ids = self.members_to_spaces.get(who).unwrap_or_default();
+
+      space_ids.iter()
+        .map(|&space_id| (space_id, self._space_code_hash(space_id)))
+        .collect()
+    }
+
+    fn _space_code_hash(&self, space_id: SpaceId) -> Hash {
+      build_call::<DefaultEnvironment>()
+        .call(space_id)
+        .gas_limit(0)
+        .exec_input(
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("CodeHash::code_hash")))
+        )
+        .returns::<Hash>()
+        .invoke()
     }
 
     #[ink(message)]
@@ -199,6 +214,13 @@ mod motherspace {
     #[ink(message)]
     pub fn is_deployed_space(&self, space_id: SpaceId) -> bool {
       self.is_deployed_space_impl(space_id)
+    }
+
+    #[ink(message)]
+    pub fn space_code_hash(&self, space_id: SpaceId) -> MotherSpaceResult<Hash> {
+      ensure!(self.is_deployed_space_impl(space_id), MotherSpaceError::SpaceNotFound);
+
+      Ok(self._space_code_hash(space_id))
     }
 
     #[ink(message)]
@@ -258,7 +280,7 @@ mod motherspace {
         .call(launcher)
         .gas_limit(0)
         .exec_input(
-          ExecutionInput::new(Selector::new(ink::selector_bytes!("latest_plugin_code")))
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("PluginLauncher::latest_plugin_code")))
         )
         .returns::<Hash>()
         .invoke();
@@ -275,7 +297,7 @@ mod motherspace {
         .call(launcher)
         .gas_limit(0)
         .exec_input(
-          ExecutionInput::new(Selector::new(ink::selector_bytes!("upgrade_plugin_code")))
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("PluginLauncher::upgrade_plugin_code")))
             .push_arg(new_code_hash)
         )
         .returns::<Version>()
@@ -297,12 +319,12 @@ mod motherspace {
         .call(space_id)
         .gas_limit(0)
         .exec_input(
-          ExecutionInput::new(Selector::new(ink::selector_bytes!("owner_id")))
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("Ownable::owner")))
         )
-        .returns::<AccountId>()
+        .returns::<Option<AccountId>>()
         .invoke();
 
-      ensure!(space_owner_id == self.env().caller(), MotherSpaceError::UnAuthorized);
+      ensure!(space_owner_id == Some(self.env().caller()), MotherSpaceError::UnAuthorized);
 
       self.install_plugins_impl(space_id, plugins)
     }
@@ -316,7 +338,7 @@ mod motherspace {
             .call(launcher_address)
             .gas_limit(0)
             .exec_input(
-              ExecutionInput::new(Selector::new(ink::selector_bytes!("launch")))
+              ExecutionInput::new(Selector::new(ink::selector_bytes!("PluginLauncher::launch")))
                 .push_arg(space_id)
             )
             .returns::<MotherSpaceResult<AccountId>>()

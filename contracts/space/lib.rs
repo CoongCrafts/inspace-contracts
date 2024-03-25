@@ -90,6 +90,7 @@ mod space {
     id: PluginId,
     address: AccountId,
     disabled: bool,
+    code_hash: Hash
   }
 
   #[ink(storage)]
@@ -169,6 +170,7 @@ mod space {
           id,
           address: self.plugins.get(id).unwrap(),
           disabled: self.disabled_plugin_ids.get_or_default().contains(&id),
+          code_hash: self._plugin_code_hash(id).unwrap(),
         })
         .collect()
     }
@@ -201,7 +203,11 @@ mod space {
     }
 
     #[ink(message)]
-    pub fn plugin_code_hash(&mut self, plugin_id: PluginId) -> SpaceResult<Hash> {
+    pub fn plugin_code_hash(&self, plugin_id: PluginId) -> SpaceResult<Hash> {
+      self._plugin_code_hash(plugin_id)
+    }
+
+    fn _plugin_code_hash(&self, plugin_id: PluginId) -> SpaceResult<Hash> {
       let plugin_ids = self.plugin_ids.get_or_default();
       ensure!(plugin_ids.contains(&plugin_id), SpaceError::PluginNotFound);
       let plugin_address = self.plugins.get(plugin_id).ok_or(SpaceError::PluginNotFound)?;
@@ -210,7 +216,7 @@ mod space {
         .call(plugin_address)
         .gas_limit(0)
         .exec_input(
-          ExecutionInput::new(Selector::new(ink::selector_bytes!("code_hash")))
+          ExecutionInput::new(Selector::new(ink::selector_bytes!("CodeHash::code_hash")))
         )
         .returns::<Hash>()
         .invoke();

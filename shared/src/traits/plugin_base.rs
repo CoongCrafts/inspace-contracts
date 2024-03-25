@@ -83,14 +83,7 @@ pub trait PluginBase: Storage<Data> {
   }
 
   fn _ensure_space_owner(&self) -> PluginResult<()> {
-    let space_owner_id = build_call::<DefaultEnvironment>()
-      .call(self._space_id())
-      .gas_limit(0)
-      .exec_input(
-        ExecutionInput::new(Selector::new(ink::selector_bytes!("owner_id")))
-      )
-      .returns::<AccountId>()
-      .invoke();
+    let space_owner_id = self._space_owner_id();
 
     let caller = Self::env().caller();
 
@@ -104,6 +97,19 @@ pub trait PluginBase: Storage<Data> {
   fn _init(&mut self, space_id: AccountId, launcher_id: AccountId) {
     self.data().space_id.set(&space_id);
     self.data().launcher_id.set(&launcher_id);
+  }
+
+  fn _space_owner_id(&self) -> AccountId {
+    let maybe_owner = build_call::<DefaultEnvironment>()
+      .call(self._space_id())
+      .gas_limit(0)
+      .exec_input(
+        ExecutionInput::new(Selector::new(ink::selector_bytes!("Ownable::owner")))
+      )
+      .returns::<Option<AccountId>>()
+      .invoke();
+
+    maybe_owner.unwrap()
   }
 }
 

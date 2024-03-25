@@ -4,7 +4,7 @@ pub use posts::{PostsRef};
 
 #[openbrush::contract]
 mod posts {
-  use ink::prelude::{vec::Vec};
+  use ink::prelude::{vec::Vec, vec};
   use ink::storage::{Mapping, Lazy};
   use openbrush::{modifiers, traits::{Storage, String}};
   use shared::traits::codehash::*;
@@ -131,7 +131,7 @@ mod posts {
 
     #[ink(message)]
     pub fn new_post(&mut self, content: PostContent) -> PostResult<(PostCreationStatus, u32)> {
-      self.ensure_post_permission()?;
+      self._ensure_post_permission()?;
 
       // TODO verify post content
 
@@ -141,7 +141,7 @@ mod posts {
       Ok(match permission {
         PostPerm::SpaceOwner | PostPerm::ActiveMember => (PostCreationStatus::Created, self._new_post(content)?),
         PostPerm::ActiveMemberWithApproval => {
-          let space_owner = self.get_space_owner_id();
+          let space_owner = self._space_owner_id();
 
           if caller == space_owner {
             (PostCreationStatus::Created, self._new_post(content)?)
@@ -193,9 +193,8 @@ mod posts {
     }
 
     #[ink(message)]
+    #[modifiers(only_space_owner)]
     pub fn submit_pending_post_approvals(&mut self, approvals: Vec<PendingPostApproval>) -> PostResult<ApprovalSubmissionResult> {
-      self.ensure_space_owner()?;
-
       let mut approved_count: u32 = 0;
       let mut rejected_count: u32 = 0;
       let mut not_found_count: u32 = 0;
@@ -259,14 +258,13 @@ mod posts {
     }
 
     #[ink(message)]
+    #[modifiers(only_active_member)]
     pub fn cancel_pending_post(&mut self, pending_post_id: PostId) -> PostResult<()> {
-      self.ensure_active_member()?;
-
-      let post = self.pending_posts.get(pending_post_id).ok_or(Error::PostNotExisted)?;
+      let post = self.pending_posts.get(pending_post_id).ok_or(PostError::PostNotExisted)?;
 
       let caller = Self::env().caller();
       if caller != post.author {
-        return Err(Error::UnAuthorized);
+        return Err(PluginError::UnAuthorized.into());
       }
 
       let mut pending_posts = self.pending_post_ids.get_or_default();
@@ -282,14 +280,13 @@ mod posts {
     }
 
     #[ink(message)]
+    #[modifiers(only_active_member)]
     pub fn update_pending_post(&mut self, pending_post_id: PostId, content: PostContent) -> PostResult<()> {
-      self.ensure_active_member()?;
-
-      let mut post = self.pending_posts.get(pending_post_id).ok_or(Error::PostNotExisted)?;
+      let mut post = self.pending_posts.get(pending_post_id).ok_or(PostError::PostNotExisted)?;
 
       let caller = Self::env().caller();
       if caller != post.author {
-        return Err(Error::UnAuthorized);
+        return Err(PluginError::UnAuthorized.into());
       }
 
       post.content = content;
@@ -311,11 +308,10 @@ mod posts {
     }
 
     #[ink(message)]
+    #[modifiers(only_space_owner)]
     pub fn pin_post(&mut self, post_id: PostId) -> PostResult<()> {
-      self.ensure_space_owner()?;
-
       if !self.posts.contains(post_id) {
-        return Err(Error::PostNotExisted);
+        return Err(PostError::PostNotExisted);
       }
 
       let mut pinned_posts = self.pinned_posts.get_or_default();
@@ -329,8 +325,8 @@ mod posts {
     }
 
     #[ink(message)]
+    #[modifiers(only_space_owner)]
     pub fn unpin_post(&mut self, post_id: PostId) -> PostResult<()> {
-      self.ensure_space_owner()?;
 
       let mut pinned_posts = self.pinned_posts.get_or_default();
       if pinned_posts.contains(&post_id) {
@@ -345,7 +341,7 @@ mod posts {
     #[ink(message)]
     #[modifiers(only_active_member)]
     pub fn update_post(&mut self, id: PostId, content: PostContent) -> PostResult<()> {
-      let mut post = self.get_post_by_id(id).ok_or(PostError::PostNotExisted)?;
+      let mut post = self._get_post_by_id(id).ok_or(PostError::PostNotExisted)?;
 
       let caller = Self::env().caller();
       let space_owner_id = self._space_owner_id();
@@ -394,13 +390,13 @@ mod posts {
 
     #[ink(message)]
     pub fn post_by_id(&self, id: PostId) -> Option<Post> {
-      self.get_post_by_id(id)
+      self._get_post_by_id(id)
     }
 
     #[ink(message)]
     pub fn posts_by_ids(&self, ids: Vec<PostId>) -> Vec<(PostId, Option<Post>)> {
       ids.iter()
-        .map(|&id| (id, self.get_post_by_id(id)))
+        .map(|&id| (id, self._get_post_by_id(id)))
         .collect()
     }
 
@@ -424,7 +420,7 @@ mod posts {
     }
 
     fn _new_post(&mut self, content: PostContent) -> PostResult<PostId> {
-      self.ensure_post_permission()?;
+      self._ensure_post_permission()?;
 
       let caller = self.env().caller();
 
@@ -470,11 +466,11 @@ mod posts {
       Ok(new_pending_post_id)
     }
 
-    fn get_post_by_id(&self, id: PostId) -> Option<Post> {
+    fn _get_post_by_id(&self, id: PostId) -> Option<Post> {
       self.posts.get(id)
     }
 
-    fn ensure_post_permission(&self) -> PostResult<()> {
+    fn _ensure_post_permission(&self) -> PostResult<()> {
       let permission = self.post_perm();
 
       match permission {

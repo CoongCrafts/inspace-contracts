@@ -2,23 +2,28 @@
 
 pub use posts::{PostsRef};
 
-#[ink::contract]
+#[openbrush::contract]
 mod posts {
-  use ink::env::call::{build_call, ExecutionInput, Selector};
-  use ink::env::DefaultEnvironment;
-  use ink::prelude::{vec::Vec, string::String, vec};
-  use ink::storage::{Lazy, Mapping};
+  use ink::prelude::{vec::Vec};
+  use ink::storage::{Mapping, Lazy};
+  use openbrush::{modifiers, traits::{Storage, String}};
+  use shared::traits::codehash::*;
+  use shared::traits::plugin_base::*;
 
-  type Result<T> = core::result::Result<T, Error>;
+  type PostResult<T> = core::result::Result<T, PostError>;
 
   #[derive(scale::Encode, scale::Decode, Debug, PartialEq, Eq, Clone)]
   #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-  pub enum Error {
+  pub enum PostError {
     Custom(String),
-    UnAuthorized,
+    PluginError(PluginError),
     PostNotExisted,
-    NotActiveMember,
-    NotSpaceOwner,
+  }
+
+  impl From<PluginError> for PostError {
+    fn from(error: PluginError) -> Self {
+      PostError::PluginError(error)
+    }
   }
 
   type PostId = u32;
@@ -94,10 +99,10 @@ mod posts {
   type PostsPage = Pagination<PostRecord>;
 
   #[ink(storage)]
-  #[derive(Default)]
+  #[derive(Default, Storage)]
   pub struct Posts {
-    space_id: Lazy<AccountId>,
-    launcher_id: Lazy<AccountId>,
+    #[storage_field]
+    base: plugin_base::Data,
 
     posts: Mapping<PostId, Post>,
     posts_nonce: Lazy<Nonce>,
@@ -112,18 +117,20 @@ mod posts {
     post_perm: Lazy<PostPerm>,
   }
 
+  impl CodeHash for Posts {}
+  impl PluginBase for Posts {}
+
   impl Posts {
     #[ink(constructor)]
     pub fn new(space_id: AccountId, launcher_id: AccountId) -> Self {
-      let mut one = Posts::default();
-      one.space_id.set(&space_id);
-      one.launcher_id.set(&launcher_id);
+      let mut one = Self::default();
+      plugin_base::PluginBase::_init(&mut one, space_id, launcher_id);
 
       one
     }
 
     #[ink(message)]
-    pub fn new_post(&mut self, content: PostContent) -> Result<(PostCreationStatus, u32)> {
+    pub fn new_post(&mut self, content: PostContent) -> PostResult<(PostCreationStatus, u32)> {
       self.ensure_post_permission()?;
 
       // TODO verify post content
@@ -186,7 +193,7 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn submit_pending_post_approvals(&mut self, approvals: Vec<PendingPostApproval>) -> Result<ApprovalSubmissionResult> {
+    pub fn submit_pending_post_approvals(&mut self, approvals: Vec<PendingPostApproval>) -> PostResult<ApprovalSubmissionResult> {
       self.ensure_space_owner()?;
 
       let mut approved_count: u32 = 0;
@@ -252,7 +259,7 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn cancel_pending_post(&mut self, pending_post_id: PostId) -> Result<()> {
+    pub fn cancel_pending_post(&mut self, pending_post_id: PostId) -> PostResult<()> {
       self.ensure_active_member()?;
 
       let post = self.pending_posts.get(pending_post_id).ok_or(Error::PostNotExisted)?;
@@ -275,7 +282,7 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn update_pending_post(&mut self, pending_post_id: PostId, content: PostContent) -> Result<()> {
+    pub fn update_pending_post(&mut self, pending_post_id: PostId, content: PostContent) -> PostResult<()> {
       self.ensure_active_member()?;
 
       let mut post = self.pending_posts.get(pending_post_id).ok_or(Error::PostNotExisted)?;
@@ -304,7 +311,7 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn pin_post(&mut self, post_id: PostId) -> Result<()> {
+    pub fn pin_post(&mut self, post_id: PostId) -> PostResult<()> {
       self.ensure_space_owner()?;
 
       if !self.posts.contains(post_id) {
@@ -322,7 +329,7 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn unpin_post(&mut self, post_id: PostId) -> Result<()> {
+    pub fn unpin_post(&mut self, post_id: PostId) -> PostResult<()> {
       self.ensure_space_owner()?;
 
       let mut pinned_posts = self.pinned_posts.get_or_default();
@@ -336,16 +343,15 @@ mod posts {
 
 
     #[ink(message)]
-    pub fn update_post(&mut self, id: PostId, content: PostContent) -> Result<()> {
-      self.ensure_active_member()?;
-
-      let mut post = self.get_post_by_id(id).ok_or(Error::PostNotExisted)?;
+    #[modifiers(only_active_member)]
+    pub fn update_post(&mut self, id: PostId, content: PostContent) -> PostResult<()> {
+      let mut post = self.get_post_by_id(id).ok_or(PostError::PostNotExisted)?;
 
       let caller = Self::env().caller();
-      let space_owner_id = self.get_space_owner_id();
+      let space_owner_id = self._space_owner_id();
 
       if !(caller == post.author || caller == space_owner_id) {
-        return Err(Error::UnAuthorized);
+        return Err(PluginError::UnAuthorized.into());
       }
 
       post.content = content;
@@ -404,8 +410,8 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn update_perm(&mut self, new_perm: PostPerm) -> Result<()> {
-      self.ensure_space_owner()?;
+    #[modifiers(only_space_owner)]
+    pub fn update_perm(&mut self, new_perm: PostPerm) -> PostResult<()> {
 
       self.post_perm.set(&new_perm);
 
@@ -417,20 +423,7 @@ mod posts {
       self.posts_nonce.get_or_default()
     }
 
-
-    /// Get space id
-    #[ink(message)]
-    pub fn space_id(&self) -> AccountId {
-      self.get_space_id()
-    }
-
-    /// Get launcher id
-    #[ink(message)]
-    pub fn launcher_id(&self) -> AccountId {
-      self.get_launcher_id()
-    }
-
-    fn _new_post(&mut self, content: PostContent) -> Result<PostId> {
+    fn _new_post(&mut self, content: PostContent) -> PostResult<PostId> {
       self.ensure_post_permission()?;
 
       let caller = self.env().caller();
@@ -451,7 +444,7 @@ mod posts {
       Ok(new_post_id)
     }
 
-    fn _new_pending_post(&mut self, content: PostContent) -> Result<PostId> {
+    fn _new_pending_post(&mut self, content: PostContent) -> PostResult<PostId> {
       let caller = self.env().caller();
 
       // Create a pending post
@@ -481,81 +474,13 @@ mod posts {
       self.posts.get(id)
     }
 
-    fn get_space_id(&self) -> AccountId {
-      self.space_id.get().unwrap()
-    }
-
-    fn get_launcher_id(&self) -> AccountId {
-      self.launcher_id.get().unwrap()
-    }
-
-    fn ensure_active_member(&self) -> Result<()> {
-      let caller = Self::env().caller();
-
-      let is_active_member = build_call::<DefaultEnvironment>()
-        .call(self.get_space_id())
-        .gas_limit(0)
-        .exec_input(
-          ExecutionInput::new(Selector::new(ink::selector_bytes!("is_active_member")))
-            .push_arg(caller)
-        )
-        .returns::<bool>()
-        .invoke();
-
-      if is_active_member {
-        Ok(())
-      } else {
-        Err(Error::NotActiveMember)
-      }
-    }
-
-    fn get_space_owner_id(&self) -> AccountId {
-      build_call::<DefaultEnvironment>()
-        .call(self.get_space_id())
-        .gas_limit(0)
-        .exec_input(
-          ExecutionInput::new(Selector::new(ink::selector_bytes!("owner_id")))
-        )
-        .returns::<AccountId>()
-        .invoke()
-    }
-
-    fn ensure_space_owner(&self) -> Result<()> {
-      let caller = Self::env().caller();
-      let space_owner_id = self.get_space_owner_id();
-
-      if space_owner_id == caller {
-        Ok(())
-      } else {
-        Err(Error::NotSpaceOwner)
-      }
-    }
-
-    fn ensure_post_permission(&self) -> Result<()> {
+    fn ensure_post_permission(&self) -> PostResult<()> {
       let permission = self.post_perm();
 
       match permission {
-        PostPerm::SpaceOwner => self.ensure_space_owner(),
-        PostPerm::ActiveMember | PostPerm::ActiveMemberWithApproval => self.ensure_active_member(),
+        PostPerm::SpaceOwner => Ok(self._ensure_space_owner()?),
+        PostPerm::ActiveMember | PostPerm::ActiveMemberWithApproval => Ok(self._ensure_active_member()?),
       }
-    }
-
-    /// Upgradeable
-    #[ink(message)]
-    pub fn set_code_hash(&mut self, code_hash: Hash) -> Result<()> {
-      self.ensure_space_owner()?;
-
-      ::ink::env::set_code_hash2::<Environment>(&code_hash)
-        .map_err(|err| Error::Custom(::ink::prelude::format!("Failed to `set_code_hash` to {:?} due to {:?}", code_hash, err)))?;
-
-      ::ink::env::debug_println!("Switched code hash to {:?}.", code_hash);
-
-      Ok(())
-    }
-
-    #[ink(message)]
-    pub fn code_hash(&self) -> Hash {
-      self.env().code_hash(&self.env().account_id()).unwrap()
     }
   }
 }

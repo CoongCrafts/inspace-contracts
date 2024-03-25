@@ -1,7 +1,7 @@
 [package]
-name = "flipper_launcher"
+name = "shared"
 version = "0.1.0"
-authors = ["Thang X. Vu <thang@coongcrafts.io>"]
+authors = ["Thang X. Vu thang@coongcrafts.io"]
 edition = "2021"
 
 [dependencies]
@@ -10,16 +10,12 @@ ink = { version = "4.3.0", default-features = false }
 scale = { package = "parity-scale-codec", version = "3", default-features = false, features = ["derive"] }
 scale-info = { version = "2.6", default-features = false, features = ["derive"], optional = true }
 
-flipper = { path = '..', default-features = false, features = ["ink-as-dependency"]}
-
-shared = { path = '../../../../shared', default-features = false, features = [] }
 openbrush = { git = "https://github.com/Brushfam/openbrush-contracts", tag = "4.0.0", default-features = false, features = ['ownable', 'upgradeable'] }
 
-[dev-dependencies]
-ink_e2e = "4.2.0"
-
 [lib]
-path = "lib.rs"
+name = "shared"
+path = "src/lib.rs"
+crate-type = ["rlib"]
 
 [features]
 default = ["std"]
@@ -27,8 +23,6 @@ std = [
     "ink/std",
     "scale/std",
     "scale-info/std",
-    "shared/std",
     "openbrush/std",
 ]
 ink-as-dependency = []
-e2e-tests = []

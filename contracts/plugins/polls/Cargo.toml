@@ -10,8 +10,8 @@ ink = { version = "4.3.0", default-features = false }
 scale = { package = "parity-scale-codec", version = "3", default-features = false, features = ["derive"] }
 scale-info = { version = "2.6", default-features = false, features = ["derive"], optional = true }
 
-traits = { path = '../../../shared/traits', default-features = false, features = [] }
-helper_macros = { path = '../../../shared/helper-macros', default-features = false, features = ["ink-as-dependency"] }
+shared = { path = '../../../shared', default-features = false, features = [] }
+openbrush = { git = "https://github.com/Brushfam/openbrush-contracts", tag = "4.0.0", default-features = false, features = ['ownable', 'upgradeable'] }
 
 [dev-dependencies]
 ink_e2e = "4.2.0"
@@ -25,6 +25,9 @@ std = [
     "ink/std",
     "scale/std",
     "scale-info/std",
+    "shared/std",
+    "openbrush/std",
 ]
 ink-as-dependency = []
 e2e-tests = []
+

@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "shared/*",
+    "shared",
     "contracts/motherspace",
     "contracts/space",
     "contracts/plugins/posts",

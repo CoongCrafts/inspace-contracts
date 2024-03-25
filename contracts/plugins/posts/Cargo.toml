@@ -1,6 +1,6 @@
 [package]
 name = "posts"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Thang X. Vu <thang@coongcrafts.io>"]
 edition = "2021"
 

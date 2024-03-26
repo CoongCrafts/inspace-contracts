@@ -354,49 +354,47 @@ mod posts {
       Ok(())
     }
 
- #[ink(message)]
-    pub fn new_comment(&mut self, post_id: PostId, content: String) -> Result<CommentId>{
-        self.ensure_active_member()?;
+    #[ink(message)]
+    #[modifiers(only_active_member)]
+    pub fn new_comment(&mut self, post_id: PostId, content: String) -> PostResult<CommentId> {
+      let author = self.env().caller();
 
-        let author = self.env().caller();
+      if let Some(_) = self.posts.get(post_id) {
+        let new_comment_id = self.comments_nonce.get_or_default();
+        let next_comment_nonce = new_comment_id.saturating_add(1);
 
-        if let Some(_) = self.posts.get(post_id) {
-          let new_comment_id = self.comments_nonce.get_or_default();
-          let next_comment_nonce = new_comment_id.saturating_add(1);
+        let comment = Comment {
+          post_id,
+          content,
+          author,
+          created_at: Self::env().block_timestamp(),
+          updated_at: None
+        };
 
-          let comment = Comment {
-            post_id,
-            content,
-            author,
-            created_at: Self::env().block_timestamp(),
-            updated_at: None
-          };
+        self.comments.insert(new_comment_id, &comment);
 
-          self.comments.insert(new_comment_id, &comment);
+        let mut comments = self.post_to_comments.get(post_id).unwrap_or(Vec::new());
+        comments.push(new_comment_id);
+        self.post_to_comments.insert(post_id, &comments);
 
-          let mut comments = self.post_to_comments.get(post_id).unwrap_or(Vec::new());
-          comments.push(new_comment_id);
-          self.post_to_comments.insert(post_id, &comments);
+        self.comments_nonce.set(&next_comment_nonce);
 
-          self.comments_nonce.set(&next_comment_nonce);
-
-          Ok(new_comment_id)
-        } else {
-          Err(Error::PostNotExisted)
-        }
+        Ok(new_comment_id)
+      } else {
+        Err(PostError::PostNotExisted)
+      }
     }
 
     #[ink(message)]
-    pub fn update_comment(&mut self, id: CommentId, content: String) -> Result<()> {
-      self.ensure_active_member()?;
-
-      let mut comment = self.comments.get(id).ok_or(Error::CommentNotExisted)?;
+    #[modifiers(only_active_member)]
+    pub fn update_comment(&mut self, id: CommentId, content: String) -> PostResult<()> {
+      let mut comment = self.comments.get(id).ok_or(PostError::CommentNotExisted)?;
 
       let caller = self.env().caller();
-      let space_owner = self.get_space_owner_id();
+      let space_owner_id = self._space_owner_id();
 
-      if comment.author != caller && comment.author != space_owner {
-        return Err(Error::UnAuthorized);
+      if caller != comment.author && caller != space_owner_id {
+        return Err(PluginError::UnAuthorized.into());
       }
 
       comment.content = content;
@@ -408,16 +406,15 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn delete_comment(&mut self, id: CommentId) -> Result<()> {
-      self.ensure_active_member()?;
-
-      let comment = self.comments.get(id).ok_or(Error::CommentNotExisted)?;
+    #[modifiers(only_active_member)]
+    pub fn delete_comment(&mut self, id: CommentId) -> PostResult<()> {
+      let comment = self.comments.get(id).ok_or(PostError::CommentNotExisted)?;
 
       let caller = self.env().caller();
-      let space_owner = self.get_space_owner_id();
+      let space_owner_id = self._space_owner_id();
 
-      if comment.author != caller && comment.author != space_owner {
-        return Err(Error::UnAuthorized);
+      if caller != comment.author && caller != space_owner_id {
+        return Err(PluginError::UnAuthorized.into());
       }
 
       let mut comments = self.post_to_comments.get(comment.post_id).unwrap();

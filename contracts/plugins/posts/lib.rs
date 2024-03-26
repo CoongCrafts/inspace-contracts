@@ -19,11 +19,13 @@ mod posts {
     PostNotExisted,
     NotActiveMember,
     NotSpaceOwner,
+    CommentNotExisted,
   }
 
   type PostId = u32;
   type Nonce = u32;
   type PendingPostId = u32;
+  type CommentId = u32;
 
   pub type PendingPostApproval = (PendingPostId, bool);
 
@@ -85,6 +87,17 @@ mod posts {
     post: Post,
   }
 
+  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
+  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
+  pub struct Comment {
+    post_id: PostId,
+    content: String,
+    author: AccountId,
+    created_at: Timestamp,
+    updated_at: Option<Timestamp>,
+  }
+
+
   type PostsPage = Pagination<PostRecord>;
 
   #[ink(storage)]
@@ -95,6 +108,10 @@ mod posts {
 
     posts: Mapping<PostId, Post>,
     posts_nonce: Lazy<Nonce>,
+
+    comments: Mapping<CommentId, Comment>,
+    post_to_comments: Mapping<PostId, Vec<CommentId>>,
+    comments_nonce: Lazy<Nonce>,
 
     pending_posts_list: Mapping<PendingPostId, Post>,
     author_to_pending_posts: Mapping<AccountId, Vec<PendingPostId>>,
@@ -159,9 +176,96 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn list_pending_posts(&self, from: u32, per_page: u32) -> PostsPage {
-      self.ensure_space_owner().expect("NotSpaceOwner");
+    pub fn new_comment(&mut self, post_id: PostId, content: String) -> Result<CommentId>{
+        self.ensure_active_member()?;
 
+        let author = self.env().caller();
+
+        if let Some(_) = self.posts.get(post_id) {
+          let new_comment_id = self.comments_nonce.get_or_default();
+          let next_comment_nonce = new_comment_id.saturating_add(1);
+
+          let comment = Comment {
+            post_id,
+            content,
+            author,
+            created_at: Self::env().block_timestamp(),
+            updated_at: None
+          };
+
+          self.comments.insert(new_comment_id, &comment);
+
+          let mut comments = self.post_to_comments.get(post_id).unwrap_or(Vec::new());
+          comments.push(new_comment_id);
+          self.post_to_comments.insert(post_id, &comments);
+
+          self.comments_nonce.set(&next_comment_nonce);
+
+          Ok(new_comment_id)
+        } else {
+          Err(Error::PostNotExisted)
+        }
+    }
+
+    #[ink(message)]
+    pub fn update_comment(&mut self, id: CommentId, content: String) -> Result<()> {
+      self.ensure_active_member()?;
+
+      let mut comment = self.comments.get(id).ok_or(Error::CommentNotExisted)?;
+
+      let caller = self.env().caller();
+      let space_owner = self.get_space_owner_id();
+
+      if comment.author != caller && comment.author != space_owner {
+        return Err(Error::UnAuthorized);
+      }
+
+      comment.content = content;
+      comment.updated_at = Some(Self::env().block_timestamp());
+
+      self.comments.insert(id, &comment);
+
+      Ok(())
+    }
+
+    #[ink(message)]
+    pub fn delete_comment(&mut self, id: CommentId) -> Result<()> {
+      self.ensure_active_member()?;
+
+      let comment = self.comments.get(id).ok_or(Error::CommentNotExisted)?;
+
+      let caller = self.env().caller();
+      let space_owner = self.get_space_owner_id();
+
+      if comment.author != caller && comment.author != space_owner {
+        return Err(Error::UnAuthorized);
+      }
+
+      let mut comments = self.post_to_comments.get(comment.post_id).unwrap();
+      comments.retain(|comment_id| comment_id != &id);
+      self.post_to_comments.insert(comment.post_id, &comments);
+
+      self.comments.remove(id);
+
+      Ok(())
+    }
+
+
+    #[ink(message)]
+    pub fn comment_by_id(&self, id: CommentId) -> Option<Comment> {
+      self.get_comment_by_id(id)
+    }
+
+    #[ink(message)]
+    pub fn comments_by_post(&self, post_id: PostId) -> Vec<CommentId> {
+      match self.post_to_comments.get(post_id) {
+        Some(comments) => comments,
+        None => Vec::new()
+      }
+    }
+
+    #[ink(message)]
+    pub fn list_pending_posts(&self, from: u32, per_page: u32) -> PostsPage {
       let per_page = per_page.min(50); // limit per page at max 50 items
       let posts = self.pending_posts.get_or_default();
       let last_position = from.saturating_add(per_page);
@@ -183,24 +287,16 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn pending_posts_by_author(&self, who: Option<AccountId>) -> Result<Vec<PostRecord>> {
-      self.ensure_active_member()?;
-
+    pub fn pending_posts_by_author(&self, who: Option<AccountId>) -> Vec<PostRecord> {
       let caller = self.env().caller();
-      let space_owner_id = self.get_space_owner_id();
       let target = who.unwrap_or(caller);
 
-      if caller != target && caller != space_owner_id {
-        return Err(Error::UnAuthorized);
-      }
-
       let pending_posts = self.author_to_pending_posts.get(target);
-      let items = match pending_posts {
+
+      match pending_posts {
         Some(list) => list.iter().map(|id| PostRecord {post_id: *id, post:self.pending_posts_list.get(id).unwrap()}).collect(),
         None => Vec::new()
-      };
-
-      Ok(items)
+      }
     }
 
     #[ink(message)]
@@ -255,27 +351,21 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn pending_posts_count(&self) -> Result<u32> {
-      self.ensure_space_owner()?;
-
-      Ok(self.pending_posts.get_or_default().len() as u32)
+    pub fn pending_posts_count(&self) -> u32 {
+      self.pending_posts.get_or_default().len() as u32
     }
 
     #[ink(message)]
-    pub fn pending_posts_count_by_author(&self, who: Option<AccountId>) -> Result<u32> {
-      self.ensure_active_member()?;
-
+    pub fn pending_posts_count_by_author(&self, who: Option<AccountId>) -> u32 {
       let caller = self.env().caller();
-      let space_owner_id = self.get_space_owner_id();
       let target = who.unwrap_or(caller);
 
-      if caller != target && caller != space_owner_id {
-        return Err(Error::UnAuthorized);
+      let pending_posts = self.author_to_pending_posts.get(target);
+
+      match pending_posts {
+        Some(posts) => posts.len() as u32,
+        None => 0
       }
-
-      let pending_posts = self.author_to_pending_posts.get(target).unwrap_or_default();
-
-      Ok(pending_posts.len() as u32)
     }
 
     #[ink(message)]
@@ -451,6 +541,10 @@ mod posts {
     #[ink(message)]
     pub fn launcher_id(&self) -> AccountId {
       self.get_launcher_id()
+    }
+
+    fn get_comment_by_id(&self, id: CommentId) -> Option<Comment> {
+      self.comments.get(id)
     }
 
     fn create_post(&mut self, content: PostContent) -> Result<PostId> {

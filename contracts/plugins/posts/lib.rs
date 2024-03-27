@@ -18,7 +18,6 @@ mod posts {
     Custom(String),
     PluginError(PluginError),
     PostNotExisted,
-    CommentNotExisted,
   }
 
   impl From<PluginError> for PostError {
@@ -29,7 +28,6 @@ mod posts {
 
   type PostId = u32;
   type Nonce = u32;
-  type CommentId = u32;
 
   pub type PendingPostApproval = (PostId, bool);
 
@@ -89,6 +87,7 @@ mod posts {
     author: AccountId,
     created_at: Timestamp,
     updated_at: Option<Timestamp>,
+    parent_id: Option<PostId>,
   }
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
@@ -97,17 +96,6 @@ mod posts {
     post_id: PostId,
     post: Post,
   }
-
-  #[derive(Clone, Debug, scale::Decode, scale::Encode)]
-  #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout))]
-  pub struct Comment {
-    post_id: PostId,
-    content: String,
-    author: AccountId,
-    created_at: Timestamp,
-    updated_at: Option<Timestamp>,
-  }
-
 
   type PostsPage = Pagination<PostRecord>;
 
@@ -120,8 +108,8 @@ mod posts {
     posts: Mapping<PostId, Post>,
     posts_nonce: Lazy<Nonce>,
 
-    comments: Mapping<CommentId, Comment>,
-    post_to_comments: Mapping<PostId, Vec<CommentId>>,
+    comments: Mapping<PostId, Post>,
+    post_to_comments: Mapping<PostId, Vec<PostId>>,
     comments_nonce: Lazy<Nonce>,
 
     pending_posts: Mapping<PostId, Post>,
@@ -356,39 +344,35 @@ mod posts {
 
     #[ink(message)]
     #[modifiers(only_active_member)]
-    pub fn new_comment(&mut self, post_id: PostId, content: String) -> PostResult<CommentId> {
+    pub fn new_comment(&mut self, parent_id: PostId, content: PostContent) -> PostResult<PostId> {
+      let _post = self._get_post_by_id(parent_id).ok_or(PostError::PostNotExisted)?;
+
       let author = self.env().caller();
+      let new_comment_id = self.comments_nonce.get_or_default();
+      let next_comment_nonce = new_comment_id.saturating_add(1);
 
-      if let Some(_) = self.posts.get(post_id) {
-        let new_comment_id = self.comments_nonce.get_or_default();
-        let next_comment_nonce = new_comment_id.saturating_add(1);
+      let comment = Post {
+        parent_id: Some(parent_id),
+        content,
+        author,
+        created_at: Self::env().block_timestamp(),
+        updated_at: None
+      };
+      self.comments.insert(new_comment_id, &comment);
 
-        let comment = Comment {
-          post_id,
-          content,
-          author,
-          created_at: Self::env().block_timestamp(),
-          updated_at: None
-        };
+      let mut comments = self.post_to_comments.get(parent_id).unwrap_or_default();
+      comments.push(new_comment_id);
+      self.post_to_comments.insert(parent_id, &comments);
 
-        self.comments.insert(new_comment_id, &comment);
+      self.comments_nonce.set(&next_comment_nonce);
 
-        let mut comments = self.post_to_comments.get(post_id).unwrap_or(Vec::new());
-        comments.push(new_comment_id);
-        self.post_to_comments.insert(post_id, &comments);
-
-        self.comments_nonce.set(&next_comment_nonce);
-
-        Ok(new_comment_id)
-      } else {
-        Err(PostError::PostNotExisted)
-      }
+      Ok(new_comment_id)
     }
 
     #[ink(message)]
     #[modifiers(only_active_member)]
-    pub fn update_comment(&mut self, id: CommentId, content: String) -> PostResult<()> {
-      let mut comment = self.comments.get(id).ok_or(PostError::CommentNotExisted)?;
+    pub fn update_comment(&mut self, id: PostId, content: PostContent) -> PostResult<()> {
+      let mut comment = self.comments.get(id).ok_or(PostError::PostNotExisted)?;
 
       let caller = self.env().caller();
       let space_owner_id = self._space_owner_id();
@@ -407,8 +391,8 @@ mod posts {
 
     #[ink(message)]
     #[modifiers(only_active_member)]
-    pub fn delete_comment(&mut self, id: CommentId) -> PostResult<()> {
-      let comment = self.comments.get(id).ok_or(PostError::CommentNotExisted)?;
+    pub fn delete_comment(&mut self, id: PostId) -> PostResult<()> {
+      let comment = self.comments.get(id).ok_or(PostError::PostNotExisted)?;
 
       let caller = self.env().caller();
       let space_owner_id = self._space_owner_id();
@@ -417,9 +401,9 @@ mod posts {
         return Err(PluginError::UnAuthorized.into());
       }
 
-      let mut comments = self.post_to_comments.get(comment.post_id).unwrap();
+      let mut comments = self.post_to_comments.get(comment.parent_id.unwrap()).unwrap();
       comments.retain(|comment_id| comment_id != &id);
-      self.post_to_comments.insert(comment.post_id, &comments);
+      self.post_to_comments.insert(comment.parent_id.unwrap(), &comments);
 
       self.comments.remove(id);
 
@@ -428,13 +412,13 @@ mod posts {
 
 
     #[ink(message)]
-    pub fn comment_by_id(&self, id: CommentId) -> Option<Comment> {
+    pub fn comment_by_id(&self, id: PostId) -> Option<Post> {
       self._get_comment_by_id(id)
     }
 
     #[ink(message)]
-    pub fn comments_by_post(&self, post_id: PostId) -> Vec<CommentId> {
-      match self.post_to_comments.get(post_id) {
+    pub fn comments_by_post(&self, parent_id: PostId) -> Vec<PostId> {
+      match self.post_to_comments.get(parent_id) {
         Some(comments) => comments,
         None => Vec::new()
       }
@@ -534,6 +518,7 @@ mod posts {
         content,
         created_at: Self::env().block_timestamp(),
         updated_at: None,
+        parent_id: None,
       };
 
       self.posts.insert(new_post_id, &new_post);
@@ -554,6 +539,7 @@ mod posts {
         content,
         created_at: Self::env().block_timestamp(),
         updated_at: None,
+        parent_id: None,
       };
 
       self.pending_posts.insert(new_pending_post_id, &new_pending_post);
@@ -568,7 +554,7 @@ mod posts {
       Ok(new_pending_post_id)
     }
 
-    fn _get_comment_by_id(&self, id: CommentId) -> Option<Comment> {
+    fn _get_comment_by_id(&self, id: PostId) -> Option<Post> {
       self.comments.get(id)
     }
 

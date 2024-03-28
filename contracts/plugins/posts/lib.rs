@@ -87,6 +87,7 @@ mod posts {
     author: AccountId,
     created_at: Timestamp,
     updated_at: Option<Timestamp>,
+    parent_id: Option<PostId>,
   }
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
@@ -107,14 +108,18 @@ mod posts {
     posts: Mapping<PostId, Post>,
     posts_nonce: Lazy<Nonce>,
 
+    post_perm: Lazy<PostPerm>,
+
+    comments: Mapping<PostId, Post>,
+    post_to_comments: Mapping<PostId, Vec<PostId>>,
+    comments_nonce: Lazy<Nonce>,
+
     pending_posts: Mapping<PostId, Post>,
     author_to_pending_posts: Mapping<AccountId, Vec<PostId>>,
     pending_post_ids: Lazy<Vec<PostId>>,
     pending_posts_nonce: Lazy<Nonce>,
 
     pinned_posts: Lazy<Vec<PostId>>,
-
-    post_perm: Lazy<PostPerm>,
   }
 
   impl CodeHash for Posts {}
@@ -337,6 +342,86 @@ mod posts {
       Ok(())
     }
 
+    #[ink(message)]
+    #[modifiers(only_active_member)]
+    pub fn new_comment(&mut self, parent_id: PostId, content: PostContent) -> PostResult<PostId> {
+      let _post = self._get_post_by_id(parent_id).ok_or(PostError::PostNotExisted)?;
+
+      let author = self.env().caller();
+      let new_comment_id = self.comments_nonce.get_or_default();
+      let next_comment_nonce = new_comment_id.saturating_add(1);
+
+      let comment = Post {
+        parent_id: Some(parent_id),
+        content,
+        author,
+        created_at: Self::env().block_timestamp(),
+        updated_at: None
+      };
+      self.comments.insert(new_comment_id, &comment);
+
+      let mut comments = self.post_to_comments.get(parent_id).unwrap_or_default();
+      comments.push(new_comment_id);
+      self.post_to_comments.insert(parent_id, &comments);
+
+      self.comments_nonce.set(&next_comment_nonce);
+
+      Ok(new_comment_id)
+    }
+
+    #[ink(message)]
+    #[modifiers(only_active_member)]
+    pub fn update_comment(&mut self, id: PostId, content: PostContent) -> PostResult<()> {
+      let mut comment = self.comments.get(id).ok_or(PostError::PostNotExisted)?;
+
+      let caller = self.env().caller();
+      let space_owner_id = self._space_owner_id();
+
+      if caller != comment.author && caller != space_owner_id {
+        return Err(PluginError::UnAuthorized.into());
+      }
+
+      comment.content = content;
+      comment.updated_at = Some(Self::env().block_timestamp());
+
+      self.comments.insert(id, &comment);
+
+      Ok(())
+    }
+
+    #[ink(message)]
+    #[modifiers(only_active_member)]
+    pub fn delete_comment(&mut self, id: PostId) -> PostResult<()> {
+      let comment = self.comments.get(id).ok_or(PostError::PostNotExisted)?;
+
+      let caller = self.env().caller();
+      let space_owner_id = self._space_owner_id();
+
+      if caller != comment.author && caller != space_owner_id {
+        return Err(PluginError::UnAuthorized.into());
+      }
+
+      let mut comments = self.post_to_comments.get(comment.parent_id.unwrap()).unwrap();
+      comments.retain(|comment_id| comment_id != &id);
+      self.post_to_comments.insert(comment.parent_id.unwrap(), &comments);
+
+      self.comments.remove(id);
+
+      Ok(())
+    }
+
+
+    #[ink(message)]
+    pub fn comment_by_id(&self, id: PostId) -> Option<Post> {
+      self._get_comment_by_id(id)
+    }
+
+    #[ink(message)]
+    pub fn comments_by_post(&self, parent_id: PostId) -> Vec<PostRecord> {
+      let comment_ids = self.post_to_comments.get(parent_id).unwrap_or_default();
+
+      comment_ids.iter().map(|id| PostRecord {post_id: *id, post: self._get_comment_by_id(*id).unwrap()}).collect()
+    }
 
     #[ink(message)]
     #[modifiers(only_active_member)]
@@ -432,6 +517,7 @@ mod posts {
         content,
         created_at: Self::env().block_timestamp(),
         updated_at: None,
+        parent_id: None,
       };
 
       self.posts.insert(new_post_id, &new_post);
@@ -452,6 +538,7 @@ mod posts {
         content,
         created_at: Self::env().block_timestamp(),
         updated_at: None,
+        parent_id: None,
       };
 
       self.pending_posts.insert(new_pending_post_id, &new_pending_post);
@@ -464,6 +551,10 @@ mod posts {
       self.pending_posts_nonce.set(&next_pending_post_nonce);
 
       Ok(new_pending_post_id)
+    }
+
+    fn _get_comment_by_id(&self, id: PostId) -> Option<Post> {
+      self.comments.get(id)
     }
 
     fn _get_post_by_id(&self, id: PostId) -> Option<Post> {

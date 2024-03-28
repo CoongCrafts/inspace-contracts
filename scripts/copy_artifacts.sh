@@ -8,11 +8,11 @@ cp ./target/ink/space/space.contract ./artifacts/space/0.1.0
 cp ./target/ink/space/space.json ./artifacts/space/0.1.0
 cp ./target/ink/space/space.wasm ./artifacts/space/0.1.0
 
-mkdir -p ./artifacts/plugins/posts/0.1.0
+mkdir -p ./artifacts/plugins/posts/0.2.0
 
-cp ./target/ink/posts/posts.contract ./artifacts/plugins/posts/0.1.0
-cp ./target/ink/posts/posts.json ./artifacts/plugins/posts/0.1.0
-cp ./target/ink/posts/posts.wasm ./artifacts/plugins/posts/0.1.0
+cp ./target/ink/posts/posts.contract ./artifacts/plugins/posts/0.2.0
+cp ./target/ink/posts/posts.json ./artifacts/plugins/posts/0.2.0
+cp ./target/ink/posts/posts.wasm ./artifacts/plugins/posts/0.2.0
 
 mkdir -p ./artifacts/plugins/posts_launcher/0.1.0
 

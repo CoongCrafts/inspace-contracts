@@ -417,11 +417,10 @@ mod posts {
     }
 
     #[ink(message)]
-    pub fn comments_by_post(&self, parent_id: PostId) -> Vec<PostId> {
-      match self.post_to_comments.get(parent_id) {
-        Some(comments) => comments,
-        None => Vec::new()
-      }
+    pub fn comments_by_post(&self, parent_id: PostId) -> Vec<PostRecord> {
+      let comment_ids = self.post_to_comments.get(parent_id).unwrap_or_default();
+
+      comment_ids.iter().map(|id| PostRecord {post_id: *id, post: self._get_comment_by_id(*id).unwrap()}).collect()
     }
 
     #[ink(message)]

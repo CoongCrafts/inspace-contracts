@@ -108,6 +108,8 @@ mod posts {
     posts: Mapping<PostId, Post>,
     posts_nonce: Lazy<Nonce>,
 
+    post_perm: Lazy<PostPerm>,
+
     comments: Mapping<PostId, Post>,
     post_to_comments: Mapping<PostId, Vec<PostId>>,
     comments_nonce: Lazy<Nonce>,
@@ -118,8 +120,6 @@ mod posts {
     pending_posts_nonce: Lazy<Nonce>,
 
     pinned_posts: Lazy<Vec<PostId>>,
-
-    post_perm: Lazy<PostPerm>,
   }
 
   impl CodeHash for Posts {}

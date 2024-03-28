@@ -69,6 +69,7 @@ mod posts {
     author: AccountId,
     created_at: Timestamp,
     updated_at: Option<Timestamp>,
+    parent_id: Option<PostId>,
   }
 
   #[derive(Clone, Debug, scale::Decode, scale::Encode)]
@@ -118,6 +119,7 @@ mod posts {
         content,
         created_at: Self::env().block_timestamp(),
         updated_at: None,
+        parent_id: None
       };
 
       self.posts.insert(new_post_id, &new_post);

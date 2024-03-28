@@ -1,11 +1,11 @@
 {
   "source": {
-    "hash": "0x8df2099db74a2912bbe2c93d5d443b62cc2d8c5f2a8400df394b7f65f9840840",
+    "hash": "0x122dcfaa6dc7e6da32aa928596a90be548c13dd69368219860cb76ca790e9686",
     "language": "ink! 4.3.0",
-    "compiler": "rustc 1.78.0-nightly",
+    "compiler": "rustc 1.76.0-nightly",
     "build_info": {
       "build_mode": "Debug",
-      "cargo_contract_version": "4.0.0-alpha",
+      "cargo_contract_version": "3.2.0",
       "rust_toolchain": "nightly-aarch64-apple-darwin",
       "wasm_opt_settings": {
         "keep_debug_symbols": false,
@@ -20,7 +20,6 @@
       "Thang X. Vu <thang@coongcrafts.io>"
     ]
   },
-  "image": null,
   "spec": {
     "constructors": [
       {
@@ -683,6 +682,33 @@
         "selector": "0x71bb126a"
       },
       {
+        "args": [
+          {
+            "label": "info",
+            "type": {
+              "displayName": [
+                "spaceprofile_external",
+                "UpdateInfoInput1"
+              ],
+              "type": 11
+            }
+          }
+        ],
+        "default": false,
+        "docs": [],
+        "label": "SpaceProfile::update_info",
+        "mutates": true,
+        "payable": false,
+        "returnType": {
+          "displayName": [
+            "ink",
+            "MessageResult"
+          ],
+          "type": 19
+        },
+        "selector": "0x39c4f165"
+      },
+      {
         "args": [],
         "default": false,
         "docs": [
@@ -742,33 +768,6 @@
           "type": 19
         },
         "selector": "0xe0045839"
-      },
-      {
-        "args": [
-          {
-            "label": "info",
-            "type": {
-              "displayName": [
-                "spaceprofile_external",
-                "UpdateInfoInput1"
-              ],
-              "type": 11
-            }
-          }
-        ],
-        "default": false,
-        "docs": [],
-        "label": "SpaceProfile::update_info",
-        "mutates": true,
-        "payable": false,
-        "returnType": {
-          "displayName": [
-            "ink",
-            "MessageResult"
-          ],
-          "type": 19
-        },
-        "selector": "0x39c4f165"
       },
       {
         "args": [],
